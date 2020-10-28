@@ -18,7 +18,7 @@ package main
 
 import (
 	"github.com/hyperledger/fabric/core/chaincode/shim"
-	"github.com/polynetwork/fabric_chaincode/ccm"
+	"github.com/polynetwork/fabric-contract/ccm"
 )
 
 func main() {

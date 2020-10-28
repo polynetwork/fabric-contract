@@ -1,4 +1,4 @@
-module github.com/polynetwork/fabric_chaincode
+module github.com/polynetwork/fabric-contract
 
 go 1.15
 

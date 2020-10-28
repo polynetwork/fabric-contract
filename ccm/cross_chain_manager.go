@@ -25,7 +25,7 @@ import (
 	common2 "github.com/ethereum/go-ethereum/common"
 	"github.com/hyperledger/fabric/core/chaincode/shim"
 	"github.com/hyperledger/fabric/protos/peer"
-	"github.com/polynetwork/fabric_chaincode/utils"
+	"github.com/polynetwork/fabric-contract/utils"
 	"github.com/polynetwork/poly/common"
 	"github.com/polynetwork/poly/consensus/vbft/config"
 	"github.com/polynetwork/poly/core/types"

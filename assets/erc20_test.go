@@ -20,7 +20,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/hyperledger/fabric/core/chaincode/shim"
-	"github.com/polynetwork/fabric_chaincode/utils"
+	"github.com/polynetwork/fabric-contract/utils"
 	"github.com/polynetwork/poly/common"
 	"github.com/stretchr/testify/assert"
 	"math/big"

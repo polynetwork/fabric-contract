@@ -25,7 +25,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/hyperledger/fabric/core/chaincode/shim"
 	pb "github.com/hyperledger/fabric/protos/peer"
-	"github.com/polynetwork/fabric_chaincode/utils"
+	"github.com/polynetwork/fabric-contract/utils"
 	common2 "github.com/polynetwork/poly/common"
 	"io"
 	"math/big"

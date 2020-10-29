@@ -18,11 +18,11 @@ package utils
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/hyperledger/fabric/core/chaincode/shim"
 )
 
@@ -31,7 +31,7 @@ func GetMsgSenderAddress(stub shim.ChaincodeStubInterface) (common.Address, erro
 	if err != nil {
 		return common.Address{}, err
 	}
-	certStart := bytes.IndexAny(creatorByte, "-----BEGIN")
+	certStart := bytes.Index(creatorByte, []byte("-----BEGIN"))
 	if certStart == -1 {
 		return common.Address{}, fmt.Errorf("no CA found")
 	}
@@ -43,9 +43,11 @@ func GetMsgSenderAddress(stub shim.ChaincodeStubInterface) (common.Address, erro
 
 	cert, err := x509.ParseCertificate(bl.Bytes)
 	if err != nil {
-		return common.Address{}, fmt.Errorf("failed to parse CA")
+		return common.Address{}, fmt.Errorf("failed to parse CA: %v", err)
 	}
-	addr := common.BytesToAddress(crypto.Keccak256(cert.RawSubjectPublicKeyInfo)[12:])
+	hash := sha256.New()
+	hash.Write(cert.RawSubjectPublicKeyInfo)
+	addr := common.BytesToAddress(hash.Sum(nil)[12:])
 	return addr, nil
 	//switch pub := cert.PublicKey.(type) {
 	//case *rsa.PublicKey:

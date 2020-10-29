@@ -18,11 +18,11 @@ package assets
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/hyperledger/fabric/core/chaincode/shim"
 	pb "github.com/hyperledger/fabric/protos/peer"
 	"github.com/polynetwork/fabric-contract/utils"
@@ -155,7 +155,9 @@ func (token *ERC20TokenImpl) Init(stub shim.ChaincodeStubInterface) pb.Response 
 	if err = stub.PutState(TokenOwner, owner.Bytes()); err != nil {
 		return shim.Error(fmt.Sprintf("failed To put token owner: %v", err))
 	}
-	lpAddr := common.BytesToAddress(crypto.Keccak256(append([]byte(LockProxyAddr), owner.Bytes()...))[12:]).Bytes()
+	hash := sha256.New()
+	hash.Write(append([]byte(LockProxyAddr), owner.Bytes()...))
+	lpAddr := common.BytesToAddress(hash.Sum(nil)[12:]).Bytes()
 	if err := stub.PutState(LockProxyAddr, lpAddr); err != nil {
 		return shim.Error(fmt.Sprintf("failed to put lockproxy addr: %v", err))
 	}

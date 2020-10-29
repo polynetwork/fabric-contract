@@ -95,9 +95,17 @@ func (manager *CrossChainManager) Invoke(stub shim.ChaincodeStubInterface) peer.
 		return manager.crossChain(stub, args)
 	case "verifyHeaderAndExecuteTx":
 		return manager.verifyHeaderAndExecuteTx(stub, args)
+	case "getPolyEpochHeight":
+		return manager.getPolyEpochHeight(stub)
+	case "isAlreadyDone":
+		return manager.isAlreadyDone(stub, args)
+	case "getPolyConsensusPeers":
+		return manager.getPolyConsensusPeers(stub)
 	}
 
-	return shim.Error("Invalid invoke function name. Expecting \"initGenesisBlock\" \"changeBookKeeper\" \"crossChain\" \"verifyHeaderAndExecuteTx\"")
+	return shim.Error("Invalid invoke function name. Expecting " +
+		"\"initGenesisBlock\" \"changeBookKeeper\" \"crossChain\" \"verifyHeaderAndExecuteTx\" " +
+		"\"getPolyEpochHeight\" \"isAlreadyDone\" \"getPolyConsensusPeers\"")
 }
 
 func (manager *CrossChainManager) initGenesisBlock(stub shim.ChaincodeStubInterface, args [][]byte) peer.Response {
@@ -159,6 +167,51 @@ func (manager *CrossChainManager) initGenesisBlock(stub shim.ChaincodeStubInterf
 	}
 
 	return shim.Success(nil)
+}
+
+func (manager *CrossChainManager) getPolyConsensusPeers(stub shim.ChaincodeStubInterface) peer.Response {
+	val, err := stub.GetState(PolyConsensusPeersKey)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("failed to get poly consensus peers: %v", err))
+	}
+	return shim.Success(val)
+}
+
+func (manager *CrossChainManager) getPolyEpochHeight(stub shim.ChaincodeStubInterface) peer.Response {
+	val, err := stub.GetState(PolyEpochHeight)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("failed to get epoch height: %v", err))
+	}
+	return shim.Success(val)
+}
+
+func (manager *CrossChainManager) isAlreadyDone(stub shim.ChaincodeStubInterface, args [][]byte) peer.Response {
+	if len(args) != 1 {
+		return shim.Error(fmt.Sprintf("wrong number of args: get %d but 1 expected", len(args)))
+	}
+	val, err := stub.GetState(PolyGenesisHeader)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("failed to get raw genesis header: %v", err))
+	}
+	hdr := &types.Header{}
+	if err := hdr.Deserialization(common.NewZeroCopySource(val)); err != nil {
+		return shim.Error(fmt.Sprintf("failed to deserialize genesis header: %v", err))
+	}
+
+	txHash, err := hex.DecodeString(string(args[0]))
+	if err != nil {
+		return shim.Error(fmt.Sprintf("failed to decode hex txhash: %v", err))
+	}
+	rawPolyChainId := make([]byte, 8)
+	binary.LittleEndian.PutUint64(rawPolyChainId, hdr.ChainID)
+	rawTxId := append(rawPolyChainId, txHash...)
+	key := fmt.Sprintf("%s-%s", FromPolyTx, hex.EncodeToString(rawTxId))
+
+	raw, _ := stub.GetState(key)
+	if len(raw) == 0 {
+		return shim.Success([]byte("false"))
+	}
+	return shim.Success([]byte("true"))
 }
 
 func (manager *CrossChainManager) changeBookKeeper(stub shim.ChaincodeStubInterface, args [][]byte) peer.Response {
@@ -321,7 +374,7 @@ func (manager *CrossChainManager) verifyHeaderAndExecuteTx(stub shim.ChaincodeSt
 	} else {
 		rawAHdr, err := hex.DecodeString(string(args[3]))
 		if err != nil {
-			return shim.Error(fmt.Sprintf("failed to decode hex header: %v", err))
+			return shim.Error(fmt.Sprintf("failed to decode hex anchor header: %v", err))
 		}
 		anchorHdr := &types.Header{}
 		if err := anchorHdr.Deserialization(common.NewZeroCopySource(rawAHdr)); err != nil {
@@ -359,7 +412,7 @@ func (manager *CrossChainManager) verifyHeaderAndExecuteTx(stub shim.ChaincodeSt
 
 	rawPolyChainId := make([]byte, 8)
 	binary.LittleEndian.PutUint64(rawPolyChainId, hdr.ChainID)
-	rawTxId := append(rawPolyChainId, merkleValue.MakeTxParam.CrossChainID...)
+	rawTxId := append(rawPolyChainId, merkleValue.TxHash...)
 
 	key := fmt.Sprintf("%s-%s", FromPolyTx, hex.EncodeToString(rawTxId))
 

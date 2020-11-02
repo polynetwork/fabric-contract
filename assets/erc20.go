@@ -115,6 +115,11 @@ type ERC20TokenImpl struct {}
 
 // args: name, symbol, decimal, totalsupply, chaincodeName, isLockProxy
 func (token *ERC20TokenImpl) Init(stub shim.ChaincodeStubInterface) pb.Response {
+	rawName, _ := stub.GetState(TokenName)
+	if len(rawName) != 0 {
+		return shim.Success(nil)
+	}
+
 	args := stub.GetStringArgs()
 	if len(args) != 5 && len(args) != 6 {
 		return shim.Error("wrong args number and should be five or six")

@@ -52,6 +52,11 @@ var logger = shim.NewLogger("CrossChainManager")
 type CrossChainManager struct{}
 
 func (manager *CrossChainManager) Init(stub shim.ChaincodeStubInterface) peer.Response {
+	raw, _ := stub.GetState(CrossChainManagerDeployer)
+	if len(raw) != 0 {
+		return shim.Success(nil)
+	}
+
 	args := stub.GetArgs()
 	if len(args) != 1 {
 		return shim.Error("wrong length of args")

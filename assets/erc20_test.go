@@ -304,7 +304,7 @@ func TestERC20TokenImpl_unlock(t *testing.T) {
 
 	to, _ := hex.DecodeString(addr1)
 	txArgs := &TxArgs{
-		Amount: 1000,
+		Amount: big.NewInt(10000),
 		ToAddress: to,
 		ToAssetHash: []byte("test"),
 	}
@@ -312,14 +312,19 @@ func TestERC20TokenImpl_unlock(t *testing.T) {
 	txArgs.Serialization(sink)
 
 	mock.Args = [][]byte {
-		[]byte(hex.EncodeToString(sink.Bytes())),
+		[]byte("0470657468149b5826263c1e499cfc4c12db8ee98ac1f7584117e803000000000000000000000000000000000000000000000000000000000000"),
 	}
 	resp = impl.unlock(mock, mock.GetArgs())
 	assert.Equal(t, true, shim.OK == resp.Status,  "wrong result")
 }
 
 func TestERC20TokenImpl_Init(t *testing.T) {
-	fmt.Println(hex.EncodeToString([]byte(",%\305\343\360[\362\024\316v\210\231\204Y\360\304B\347\217\241")))
-
-	fmt.Println(big.NewInt(0).SetBytes([]byte(";.<Ѐ<è")).String())
+	fmt.Println(hex.EncodeToString([]byte("\237kSj\351\361\372\r\005c\344\333\372\370\250\354\357\032<\027")))
+	fmt.Println(hex.EncodeToString([]byte("\232B\n~W\346\007\006\377\366\232\351\001\022\354\3546\231\361\035")))
+	fmt.Println(hex.EncodeToString([]byte("\321\327}\257\275\234)\360S\202#7I\324-\265\343\343\271\214")))
+	raw, _ := hex.DecodeString("70657468")
+	fmt.Println(string(raw))
+	fmt.Println(hex.EncodeToString([]byte("peth")))
+	fmt.Println(hex.EncodeToString([]byte("'\020")))
+	fmt.Println(big.NewInt(0).SetBytes([]byte("#\206\362o\301&C")).String())
 }

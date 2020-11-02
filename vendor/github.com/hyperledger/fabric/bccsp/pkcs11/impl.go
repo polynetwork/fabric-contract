@@ -10,9 +10,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/x509"
-	"encoding/hex"
 	"os"
-	"sync"
 
 	"github.com/hyperledger/fabric/bccsp"
 	"github.com/hyperledger/fabric/bccsp/sw"
@@ -46,24 +44,19 @@ func New(opts PKCS11Opts, keyStore bccsp.KeyStore) (bccsp.BCCSP, error) {
 		return nil, errors.New("Invalid bccsp.KeyStore instance. It must be different from nil")
 	}
 
-	var sessPool chan pkcs11.SessionHandle
-	if sessionCacheSize > 0 {
-		sessPool = make(chan pkcs11.SessionHandle, sessionCacheSize)
+	lib := opts.Library
+	pin := opts.Pin
+	label := opts.Label
+	ctx, slot, session, err := loadLib(lib, pin, label)
+	if err != nil {
+		return nil, errors.Wrapf(err, "Failed initializing PKCS11 library %s %s",
+			lib, label)
 	}
 
-	csp := &impl{
-		BCCSP:       swCSP,
-		conf:        conf,
-		softVerify:  opts.SoftVerify,
-		immutable:   opts.Immutable,
-		sessPool:    sessPool,
-		sessions:    map[pkcs11.SessionHandle]struct{}{},
-		handleCache: map[string]pkcs11.ObjectHandle{},
-		keyCache:    map[string]bccsp.Key{},
-		altId:       opts.AltId,
-	}
-
-	return csp.initialize(opts)
+	sessions := make(chan pkcs11.SessionHandle, sessionCacheSize)
+	csp := &impl{swCSP, conf, keyStore, ctx, sessions, slot, lib, opts.SoftVerify, opts.Immutable}
+	csp.returnSession(*session)
+	return csp, nil
 }
 
 type impl struct {
@@ -72,24 +65,14 @@ type impl struct {
 	conf *config
 	ks   bccsp.KeyStore
 
-	ctx  *pkcs11.Ctx
-	slot uint
-	pin  string
+	ctx      *pkcs11.Ctx
+	sessions chan pkcs11.SessionHandle
+	slot     uint
 
 	lib        string
 	softVerify bool
 	//Immutable flag makes object immutable
 	immutable bool
-	// Alternate identifier of the private key
-	altId string
-
-	sessLock sync.Mutex
-	sessPool chan pkcs11.SessionHandle
-	sessions map[pkcs11.SessionHandle]struct{}
-
-	cacheLock   sync.RWMutex
-	handleCache map[string]pkcs11.ObjectHandle
-	keyCache    map[string]bccsp.Key
 }
 
 // KeyGen generates a key using opts.
@@ -129,19 +112,6 @@ func (csp *impl) KeyGen(opts bccsp.KeyGenOpts) (k bccsp.Key, err error) {
 	}
 
 	return k, nil
-}
-
-func (csp *impl) cacheKey(ski []byte, key bccsp.Key) {
-	csp.cacheLock.Lock()
-	csp.keyCache[hex.EncodeToString(ski)] = key
-	csp.cacheLock.Unlock()
-}
-
-func (csp *impl) cachedKey(ski []byte) (bccsp.Key, bool) {
-	csp.cacheLock.RLock()
-	defer csp.cacheLock.RUnlock()
-	key, ok := csp.keyCache[hex.EncodeToString(ski)]
-	return key, ok
 }
 
 // KeyImport imports a key from its raw representation using opts.
@@ -184,23 +154,14 @@ func (csp *impl) KeyImport(raw interface{}, opts bccsp.KeyImportOpts) (k bccsp.K
 // GetKey returns the key this CSP associates to
 // the Subject Key Identifier ski.
 func (csp *impl) GetKey(ski []byte) (bccsp.Key, error) {
-	if key, ok := csp.cachedKey(ski); ok {
-		return key, nil
-	}
-
 	pubKey, isPriv, err := csp.getECKey(ski)
-	if err != nil {
-		logger.Debugf("Key not found using PKCS11: %v", err)
-		return csp.BCCSP.GetKey(ski)
+	if err == nil {
+		if isPriv {
+			return &ecdsaPrivateKey{ski, ecdsaPublicKey{ski, pubKey}}, nil
+		}
+		return &ecdsaPublicKey{ski, pubKey}, nil
 	}
-
-	var key bccsp.Key = &ecdsaPublicKey{ski, pubKey}
-	if isPriv {
-		key = &ecdsaPrivateKey{ski, ecdsaPublicKey{ski, pubKey}}
-	}
-
-	csp.cacheKey(ski, key)
-	return key, nil
+	return csp.BCCSP.GetKey(ski)
 }
 
 // Sign signs digest using key k.

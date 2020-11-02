@@ -43,3 +43,13 @@ func VerifyPolyHeader(hdr *types.Header, peers *ont.ConsensusPeers) error {
 
 	return nil
 }
+
+type GenesisInitEvent struct {
+	Height uint32 `json:"height"`
+	RawHeader []byte `json:"raw_header"`
+}
+
+type BookKeepersChangedEvent struct {
+	RawPeers []byte `json:"raw_peers"`
+}
+

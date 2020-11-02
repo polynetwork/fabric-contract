@@ -47,6 +47,8 @@ const (
 	FromPolyTx                = "from_poly"
 )
 
+var logger = shim.NewLogger("CrossChainManager")
+
 type CrossChainManager struct{}
 
 func (manager *CrossChainManager) Init(stub shim.ChaincodeStubInterface) peer.Response {
@@ -166,6 +168,8 @@ func (manager *CrossChainManager) initGenesisBlock(stub shim.ChaincodeStubInterf
 		return shim.Error(fmt.Sprintf("failed to save epoch height: %v", err))
 	}
 
+	logger.Infof("initGenesisBlock success: (height: %d, raw_peers: %x)", hdr.Height, sink.Bytes())
+
 	return shim.Success(nil)
 }
 
@@ -276,6 +280,8 @@ func (manager *CrossChainManager) changeBookKeeper(stub shim.ChaincodeStubInterf
 		return shim.Error(fmt.Sprintf("failed to save epoch height: %v", err))
 	}
 
+	logger.Infof("changeBookKeeper success: (height: %d, raw_peers: %x)", hdr.Height, sink.Bytes())
+
 	return shim.Success(nil)
 }
 
@@ -336,7 +342,11 @@ func (manager *CrossChainManager) crossChain(stub shim.ChaincodeStubInterface, a
 		return shim.Error(fmt.Sprintf("failed to set event: %v", err))
 	}
 
-	return shim.Success(nil)
+	logger.Infof("to_poly call success: " +
+		"(fabric_txhash: %s, ccid: %s, dapp_chain_code: %s, to_cahinID: %d, to_contract: %s, calling_method: %s, args: %s)",
+		stub.GetTxID(), hex.EncodeToString(rawCcid), string(args[4]), toChainId, string(args[1]), string(args[2]), string(args[3]))
+
+	return shim.Success(raw)
 }
 
 func (manager *CrossChainManager) verifyHeaderAndExecuteTx(stub shim.ChaincodeStubInterface, args [][]byte) peer.Response {
@@ -417,7 +427,7 @@ func (manager *CrossChainManager) verifyHeaderAndExecuteTx(stub shim.ChaincodeSt
 	key := fmt.Sprintf("%s-%s", FromPolyTx, hex.EncodeToString(rawTxId))
 
 	if val, _ := stub.GetState(key); len(val) != 0 {
-		return shim.Error(fmt.Sprintf("this cross chain tx %s already done", key))
+		return shim.Error(fmt.Sprintf("this cross chain tx %s already done", hex.EncodeToString(merkleValue.TxHash)))
 	}
 	if err := stub.PutState(key, rawTxId); err != nil {
 		return shim.Error(fmt.Sprintf("put key: %s error: %v", key, err))
@@ -440,5 +450,16 @@ func (manager *CrossChainManager) verifyHeaderAndExecuteTx(stub shim.ChaincodeSt
 	invokeArgs := make([][]byte, 2)
 	invokeArgs[0] = []byte(merkleValue.MakeTxParam.Method)
 	invokeArgs[1] = []byte(hex.EncodeToString(merkleValue.MakeTxParam.Args))
-	return stub.InvokeChaincode(string(merkleValue.MakeTxParam.ToContractAddress), invokeArgs, stub.GetChannelID())
+	resp := stub.InvokeChaincode(string(merkleValue.MakeTxParam.ToContractAddress), invokeArgs, "")
+	if resp.Status != shim.OK {
+		return shim.Error(fmt.Sprintf("failed to call DApp %s from (from_chainID: %d, from_contract: %s): %s",
+			string(merkleValue.MakeTxParam.ToContractAddress), merkleValue.FromChainID,
+			hex.EncodeToString(merkleValue.MakeTxParam.FromContractAddress), resp.GetMessage()))
+	}
+
+	logger.Infof("from_poly call success: (from_chainID: %d, from_contract: %s, dapp_chain_code: %s, method: %s, args: %x)",
+		merkleValue.FromChainID, hex.EncodeToString(merkleValue.MakeTxParam.FromContractAddress), string(merkleValue.MakeTxParam.ToContractAddress),
+		merkleValue.MakeTxParam.Method, merkleValue.MakeTxParam.Args)
+
+	return shim.Success(nil)
 }

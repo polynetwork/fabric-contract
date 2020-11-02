@@ -53,18 +53,22 @@ const (
 	LockProxyAddr = "lockproxy_addr"
 	ProxyChainCodeName = "chaincode_name"
 	IsLockProxy = "is_lp"
+	FromCCM = "from_ccm"
 )
+
+var logger = shim.NewLogger("ERC20")
 
 type TxArgs struct {
 	ToAssetHash []byte
 	ToAddress []byte
-	Amount uint64
+	Amount *big.Int
 }
 
 func (args *TxArgs) Serialization(sink *common2.ZeroCopySink) {
 	sink.WriteVarBytes(args.ToAssetHash)
 	sink.WriteVarBytes(args.ToAddress)
-	sink.WriteVarUint(args.Amount)
+	raw, _ := PadFixedBytes(args.Amount, 32)
+	sink.WriteBytes(raw)
 }
 
 func (args *TxArgs) Deserialization(source *common2.ZeroCopySource) error {
@@ -78,13 +82,19 @@ func (args *TxArgs) Deserialization(source *common2.ZeroCopySource) error {
 		return fmt.Errorf("Args.Deserialization NextVarBytes ToAddress error:%s", io.ErrUnexpectedEOF)
 	}
 
-	value, eof := source.NextVarUint()
+	value, eof := source.NextBytes(32)
 	if eof {
-		return fmt.Errorf("Args.Deserialization NextVarUint Value error:%s", io.ErrUnexpectedEOF)
+		return fmt.Errorf("Args.Deserialization NextBytes Value error:%s", io.ErrUnexpectedEOF)
 	}
+
+	amt, err := UnpadFixedBytes(value, 32)
+	if err != nil {
+		return fmt.Errorf("faield to get amount: %v", err)
+	}
+
 	args.ToAssetHash = assetHash
 	args.ToAddress = toAddress
-	args.Amount = value
+	args.Amount = amt
 	return nil
 }
 
@@ -757,7 +767,7 @@ func (token *ERC20TokenImpl) lock(stub shim.ChaincodeStubInterface, args [][]byt
 
 	resp := token.transferLogic(stub, from.Bytes(), lpAddr, amt)
 	if resp.Status != shim.OK {
-		return shim.Error(fmt.Sprintf("failed to lock asset: %v", err))
+		return shim.Error(fmt.Sprintf("failed to lock asset: %s", resp.Message))
 	}
 
 	chainId, err := strconv.ParseUint(string(args[0]), 10, 64)
@@ -794,7 +804,7 @@ func (token *ERC20TokenImpl) lock(stub shim.ChaincodeStubInterface, args [][]byt
 	txArgs := &TxArgs{
 		ToAssetHash: toAsset,
 		ToAddress: toAddr,
-		Amount: amt.Uint64(),
+		Amount: amt,
 	}
 	sink := common2.NewZeroCopySink(nil)
 	txArgs.Serialization(sink)
@@ -812,7 +822,18 @@ func (token *ERC20TokenImpl) lock(stub shim.ChaincodeStubInterface, args [][]byt
 	invokeArgs[4] = []byte(hex.EncodeToString(sink.Bytes()))
 	invokeArgs[5] = ccname
 
-	return stub.InvokeChaincode(string(ccm), invokeArgs, stub.GetChannelID())
+	resp = stub.InvokeChaincode(string(ccm), invokeArgs, "")
+	if resp.Status != shim.OK {
+		return shim.Error(fmt.Sprintf("failed to InvokeChaincode ccm %s: %s", string(ccm), resp.Message))
+	}
+	if err := stub.SetEvent(FromCCM, resp.Payload); err != nil {
+		return shim.Error(fmt.Sprintf("failed to set event: %v", err))
+	}
+
+	logger.Infof("successful to call ccm for cross-chain: (to_chainID: %d, to_contract: %x, to_asset: %x, to_addr: %x, amount: %s)",
+		chainId, toProxy, toAsset, toAddr, amt.String())
+
+	return shim.Success(nil)
 }
 
 func (token *ERC20TokenImpl) unlock(stub shim.ChaincodeStubInterface, args [][]byte) pb.Response {
@@ -836,7 +857,15 @@ func (token *ERC20TokenImpl) unlock(stub shim.ChaincodeStubInterface, args [][]b
 		return shim.Error(fmt.Sprintf("failed to get LockProxyAddr: %v", err))
 	}
 
-	return token.transferLogic(stub, lpAddr, txArgs.ToAddress, big.NewInt(0).SetUint64(txArgs.Amount))
+	resp := token.transferLogic(stub, lpAddr, txArgs.ToAddress, txArgs.Amount)
+	if resp.Status != shim.OK {
+		return shim.Error(fmt.Sprintf("failed to transfer %s from DApp address %x to address %x: %s",
+			txArgs.Amount.String(), lpAddr, txArgs.ToAddress, resp.GetMessage()))
+	}
+
+	logger.Infof("unlock success: (to_addr: %x, amount: %s)", txArgs.ToAddress, txArgs.Amount.String())
+
+	return shim.Success(nil)
 }
 
 func (token *ERC20TokenImpl) getOwner(stub shim.ChaincodeStubInterface) pb.Response {

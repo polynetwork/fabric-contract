@@ -19,6 +19,8 @@ package assets
 import (
 	"encoding/hex"
 	"fmt"
+	"github.com/hyperledger/fabric/core/chaincode/shim"
+	"github.com/hyperledger/fabric/protos/utils"
 	"math/big"
 )
 
@@ -29,9 +31,9 @@ type TransferEvent struct {
 }
 
 type ApprovalEvent struct {
-	From []byte `json:"from"`
+	From    []byte `json:"from"`
 	Spender []byte `json:"spender"`
-	Amount []byte `json:"amount"`
+	Amount  []byte `json:"amount"`
 }
 
 type TransferOwnershipEvent struct {
@@ -80,4 +82,20 @@ func UnpadFixedBytes(paddedBs []byte, intBsLen int) (*big.Int, error) {
 	}
 
 	return big.NewInt(0).SetBytes(ToArrayReverse(paddedBs[:nonZeroPos+1])), nil
+}
+
+func GetCallingChainCodeName(stub shim.ChaincodeStubInterface) (string, error) {
+	sp, err := stub.GetSignedProposal()
+	if err != nil {
+		return "", fmt.Errorf("failed to get signed proposal: %v", err)
+	}
+	p, err := utils.GetProposal(sp.ProposalBytes)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode proposal: %v", err)
+	}
+	spec, err := utils.GetChaincodeInvocationSpec(p)
+	if err != nil {
+		return "", fmt.Errorf("failed to get invocation spec: %v", err)
+	}
+	return spec.ChaincodeSpec.ChaincodeId.Name, nil
 }

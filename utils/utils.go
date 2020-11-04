@@ -41,27 +41,18 @@ func GetMsgSenderAddress(stub shim.ChaincodeStubInterface) (common.Address, erro
 	if bl == nil {
 		return common.Address{}, fmt.Errorf("failed to decode pem")
 	}
-
 	cert, err := x509.ParseCertificate(bl.Bytes)
 	if err != nil {
 		return common.Address{}, fmt.Errorf("failed to parse CA: %v", err)
 	}
+	return GetAddrFromRaw(cert.RawSubjectPublicKeyInfo), nil
+}
+
+func GetAddrFromRaw(raw []byte) common.Address {
 	hash := sha256.New()
-	hash.Write(cert.RawSubjectPublicKeyInfo)
+	hash.Write(raw)
 	addr := common.BytesToAddress(hash.Sum(nil)[12:])
-	return addr, nil
-	//switch pub := cert.PublicKey.(type) {
-	//case *rsa.PublicKey:
-	//	pub.
-	//case *dsa.PublicKey:
-	//	fmt.Println("pub is of type DSA:", pub)
-	//case *ecdsa.PublicKey:
-	//	fmt.Println("pub is of type ECDSA:", pub)
-	//case ed25519.PublicKey:
-	//	fmt.Println("pub is of type Ed25519:", pub)
-	//default:
-	//	panic("unknown type of public key")
-	//}
+	return addr
 }
 
 func BigIntFromNeoBytes(ba []byte) *big.Int {
@@ -129,4 +120,3 @@ func bytesReverse(u []byte) []byte {
 	}
 	return u
 }
-

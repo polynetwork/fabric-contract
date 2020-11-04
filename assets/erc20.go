@@ -18,7 +18,6 @@ package assets
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -26,52 +25,51 @@ import (
 	"github.com/hyperledger/fabric/core/chaincode/shim"
 	pb "github.com/hyperledger/fabric/protos/peer"
 	"github.com/polynetwork/fabric-contract/utils"
-	common2 "github.com/polynetwork/poly/common"
+	pcommon "github.com/polynetwork/poly/common"
 	"io"
 	"math/big"
 	"strconv"
 )
 
 const (
-	TokenId      = "ERC20TokenImpl"
-	TokenOwner   = TokenId + "-Owner"
-	TokenBalance = TokenId + "-%s-Balance"
-	TokenFreeze  = TokenId + "-%s-Freeze"
-	TokenApprove = TokenId + "-%s-Approve-%s"
-	TokenName = TokenId + "-Name"
-	TokenSymbol = TokenId + "-Symbol"
-	TokenDecimal = TokenId + "-Deciaml"
+	TokenId          = "ERC20TokenImpl"
+	TokenOwner       = TokenId + "-Owner"
+	TokenBalance     = TokenId + "-%s-Balance"
+	TokenFreeze      = TokenId + "-%s-Freeze"
+	TokenApprove     = TokenId + "-%s-Approve-%s"
+	TokenName        = TokenId + "-Name"
+	TokenSymbol      = TokenId + "-Symbol"
+	TokenDecimal     = TokenId + "-Deciaml"
 	TokenTotalSupply = TokenId + "-TotalSupply"
 
-	EventTranfer = TokenId + "transfer"
-	EventApproval = TokenId + "approve"
+	EventTranfer           = TokenId + "transfer"
+	EventApproval          = TokenId + "approve"
 	EventTransferOwnership = TokenId + "transferOwnerShip"
 
-	ProxyCCM = "proxy_ccm"
-	ProxyBindKey = "proxy-%d"
-	AssetBindKey = "asset-%d"
-	LockProxyAddr = "lockproxy_addr"
-	ProxyChainCodeName = "chaincode_name"
-	IsLockProxy = "is_lp"
-	FromCCM = "from_ccm"
+	ProxyCCM           = "proxy_ccm"
+	ProxyBindKey       = "proxy-%d"
+	AssetBindKey       = "asset-%d"
+	LockProxyAddr      = "lockproxy_addr"
+	IsLockProxy        = "is_lp"
+	FromCCM            = "from_ccm"
 )
 
 var logger = shim.NewLogger("ERC20")
 
 type TxArgs struct {
 	ToAssetHash []byte
-	ToAddress []byte
-	Amount *big.Int
+	ToAddress   []byte
+	Amount      *big.Int
 }
 
-func (args *TxArgs) Serialization(sink *common2.ZeroCopySink) {
+func (args *TxArgs) Serialization(sink *pcommon.ZeroCopySink) {
 	sink.WriteVarBytes(args.ToAssetHash)
 	sink.WriteVarBytes(args.ToAddress)
 	raw, _ := PadFixedBytes(args.Amount, 32)
 	sink.WriteBytes(raw)
 }
 
-func (args *TxArgs) Deserialization(source *common2.ZeroCopySource) error {
+func (args *TxArgs) Deserialization(source *pcommon.ZeroCopySource) error {
 	assetHash, eof := source.NextVarBytes()
 	if eof {
 		return fmt.Errorf("Args.Deserialization NextVarBytes AssetHash error:%s", io.ErrUnexpectedEOF)
@@ -111,9 +109,9 @@ type ERC20 interface {
 	allowance(stub shim.ChaincodeStubInterface, args [][]byte) pb.Response
 }
 
-type ERC20TokenImpl struct {}
+type ERC20TokenImpl struct{}
 
-// args: name, symbol, decimal, totalsupply, chaincodeName, isLockProxy
+// args: name, symbol, decimal, totalsupply, isLockProxy
 func (token *ERC20TokenImpl) Init(stub shim.ChaincodeStubInterface) pb.Response {
 	rawName, _ := stub.GetState(TokenName)
 	if len(rawName) != 0 {
@@ -121,17 +119,14 @@ func (token *ERC20TokenImpl) Init(stub shim.ChaincodeStubInterface) pb.Response 
 	}
 
 	args := stub.GetStringArgs()
-	if len(args) != 5 && len(args) != 6 {
-		return shim.Error("wrong args number and should be five or six")
+	if len(args) != 4 && len(args) != 5 {
+		return shim.Error("wrong args number and should be four or five")
 	}
 	if args[0] == "" {
 		return shim.Error(fmt.Sprintf("token name can't be empty"))
 	}
 	if args[1] == "" {
 		return shim.Error(fmt.Sprintf("token symbol can't be empty"))
-	}
-	if len(args[4]) == 0 {
-		return shim.Error(fmt.Sprintf("token chaincode name can't be empty"))
 	}
 
 	decimal, ok := big.NewInt(0).SetString(args[2], 10)
@@ -170,23 +165,18 @@ func (token *ERC20TokenImpl) Init(stub shim.ChaincodeStubInterface) pb.Response 
 	if err = stub.PutState(TokenOwner, owner.Bytes()); err != nil {
 		return shim.Error(fmt.Sprintf("failed To put token owner: %v", err))
 	}
-	hash := sha256.New()
-	hash.Write(append([]byte(LockProxyAddr), owner.Bytes()...))
-	lpAddr := common.BytesToAddress(hash.Sum(nil)[12:]).Bytes()
-	if err := stub.PutState(LockProxyAddr, lpAddr); err != nil {
+	lpAddr := utils.GetAddrFromRaw(append([]byte(LockProxyAddr), owner.Bytes()...))
+	if err := stub.PutState(LockProxyAddr, lpAddr.Bytes()); err != nil {
 		return shim.Error(fmt.Sprintf("failed to put lockproxy addr: %v", err))
-	}
-	if err := stub.PutState(ProxyChainCodeName, []byte(args[4])); err != nil {
-		return shim.Error(fmt.Sprintf("failed to save chaincode name: %v", err))
 	}
 
 	var holder []byte
 	// if we get six args and it's true, it means this ERC20 start with LockProxy func
-	if len(args) == 6 && args[5] == "true" {
-		if err := stub.PutState(IsLockProxy, []byte(args[5])); err != nil {
+	if len(args) == 5 && args[4] == "true" {
+		if err := stub.PutState(IsLockProxy, []byte(args[4])); err != nil {
 			return shim.Error(fmt.Sprintf("failed to save is_lockproxy: %v", err))
 		}
-		holder = lpAddr
+		holder = lpAddr.Bytes()
 	} else {
 		holder = owner.Bytes()
 	}
@@ -339,14 +329,14 @@ func (token *ERC20TokenImpl) mint(stub shim.ChaincodeStubInterface, args [][]byt
 	}
 	bal := big.NewInt(0).SetBytes(rawBal)
 	bal = bal.Add(bal, amt)
-	
+
 	rawSupply, err := stub.GetState(TokenTotalSupply)
 	if err != nil {
 		return shim.Error(fmt.Sprintf("failed To get totalsupply: %v", err))
 	}
 	ts := big.NewInt(0).SetBytes(rawSupply)
 	ts = ts.Add(ts, amt)
-	
+
 	if err := stub.PutState(key, bal.Bytes()); err != nil {
 		return shim.Error(fmt.Sprintf("failed To update balance: %v", err))
 	}
@@ -413,8 +403,8 @@ func (token *ERC20TokenImpl) transferLogic(stub shim.ChaincodeStubInterface, fro
 	}
 
 	rawEvent, err := json.Marshal(&TransferEvent{
-		From: from,
-		To: to,
+		From:   from,
+		To:     to,
 		Amount: amt.Bytes(),
 	})
 	if err != nil {
@@ -480,8 +470,8 @@ func (token *ERC20TokenImpl) approve(stub shim.ChaincodeStubInterface, args [][]
 	}
 
 	rawEvent, err := json.Marshal(&ApprovalEvent{
-		Amount: rawAmt,
-		From: from.Bytes(),
+		Amount:  rawAmt,
+		From:    from.Bytes(),
 		Spender: spender,
 	})
 	if err != nil {
@@ -808,13 +798,13 @@ func (token *ERC20TokenImpl) lock(stub shim.ChaincodeStubInterface, args [][]byt
 	}
 	txArgs := &TxArgs{
 		ToAssetHash: toAsset,
-		ToAddress: toAddr,
-		Amount: amt,
+		ToAddress:   toAddr,
+		Amount:      amt,
 	}
-	sink := common2.NewZeroCopySink(nil)
+	sink := pcommon.NewZeroCopySink(nil)
 	txArgs.Serialization(sink)
 
-	ccname, err := stub.GetState(ProxyChainCodeName)
+	ccname, err := GetCallingChainCodeName(stub)
 	if err != nil {
 		return shim.Error(fmt.Sprintf("failed to get chaincode name: %v", err))
 	}
@@ -825,7 +815,7 @@ func (token *ERC20TokenImpl) lock(stub shim.ChaincodeStubInterface, args [][]byt
 	invokeArgs[2] = []byte(hex.EncodeToString(toProxy))
 	invokeArgs[3] = []byte("unlock")
 	invokeArgs[4] = []byte(hex.EncodeToString(sink.Bytes()))
-	invokeArgs[5] = ccname
+	invokeArgs[5] = []byte(ccname)
 
 	resp = stub.InvokeChaincode(string(ccm), invokeArgs, "")
 	if resp.Status != shim.OK {
@@ -842,19 +832,31 @@ func (token *ERC20TokenImpl) lock(stub shim.ChaincodeStubInterface, args [][]byt
 }
 
 func (token *ERC20TokenImpl) unlock(stub shim.ChaincodeStubInterface, args [][]byte) pb.Response {
-	// TODO: limit the caller must be the ccm
 	if len(args) != 1 {
 		return shim.Error("args number should be 1")
 	}
 	if !isCCOn(stub) {
 		return shim.Error("it's not for crosschain")
 	}
+	ccname, err := GetCallingChainCodeName(stub)
+	if err != nil {
+		return shim.Error(err.Error())
+	}
+	ccmName, _ := stub.GetState(ProxyCCM)
+	if len(ccmName) == 0 {
+		return shim.Error("No cross chain manager set")
+	}
+	if ccname != string(ccmName) {
+		return shim.Error(fmt.Sprintf("wrong calling chaincode: (actual: %s, expected: %s)",
+			ccname, string(ccmName)))
+	}
+
 	raw, err := hex.DecodeString(string(args[0]))
 	if err != nil {
 		return shim.Error(fmt.Sprintf("failed to decode hex args: %v", err))
 	}
 	txArgs := &TxArgs{}
-	if err := txArgs.Deserialization(common2.NewZeroCopySource(raw)); err != nil {
+	if err := txArgs.Deserialization(pcommon.NewZeroCopySource(raw)); err != nil {
 		return shim.Error(fmt.Sprintf("failed to deserialize tx args: %v", err))
 	}
 	lpAddr, err := stub.GetState(LockProxyAddr)
@@ -944,4 +946,3 @@ func getProxyBindKey(chainId uint64) string {
 func getAssetBindKey(chainId uint64) string {
 	return fmt.Sprintf(AssetBindKey, chainId)
 }
-

@@ -22,7 +22,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	common2 "github.com/ethereum/go-ethereum/common"
+	ethcomm "github.com/ethereum/go-ethereum/common"
 	"github.com/hyperledger/fabric/core/chaincode/shim"
 	"github.com/hyperledger/fabric/protos/peer"
 	"github.com/polynetwork/fabric-contract/utils"
@@ -30,7 +30,7 @@ import (
 	"github.com/polynetwork/poly/consensus/vbft/config"
 	"github.com/polynetwork/poly/core/types"
 	"github.com/polynetwork/poly/merkle"
-	common3 "github.com/polynetwork/poly/native/service/cross_chain_manager/common"
+	pcomm "github.com/polynetwork/poly/native/service/cross_chain_manager/common"
 	"github.com/polynetwork/poly/native/service/header_sync/ont"
 	"math/big"
 	"strconv"
@@ -300,7 +300,7 @@ func (manager *CrossChainManager) crossChain(stub shim.ChaincodeStubInterface, a
 		return shim.Error(fmt.Sprintf("failed to get raw cross chain id: %v", err))
 	}
 	ccid := big.NewInt(0).SetBytes(rawCcid)
-	rawCcid = common2.BytesToHash(rawCcid).Bytes()
+	rawCcid = ethcomm.BytesToHash(rawCcid).Bytes()
 
 	rawTxid, err := hex.DecodeString(stub.GetTxID())
 	if err != nil {
@@ -320,7 +320,7 @@ func (manager *CrossChainManager) crossChain(stub shim.ChaincodeStubInterface, a
 		return shim.Error(fmt.Sprintf("failed to decode args: %v", err))
 	}
 
-	res := &common3.MakeTxParam{
+	res := &pcomm.MakeTxParam{
 		TxHash:              rawTxid,
 		Method:              string(args[2]),
 		CrossChainID:        rawCcid,
@@ -347,7 +347,7 @@ func (manager *CrossChainManager) crossChain(stub shim.ChaincodeStubInterface, a
 		return shim.Error(fmt.Sprintf("failed to set event: %v", err))
 	}
 
-	logger.Infof("to_poly call success: " +
+	logger.Infof("to_poly call success: "+
 		"(fabric_txhash: %s, ccid: %s, dapp_chain_code: %s, to_cahinID: %d, to_contract: %s, calling_method: %s, args: %s)",
 		stub.GetTxID(), hex.EncodeToString(rawCcid), string(args[4]), toChainId, string(args[1]), string(args[2]), string(args[3]))
 
@@ -420,7 +420,7 @@ func (manager *CrossChainManager) verifyHeaderAndExecuteTx(stub shim.ChaincodeSt
 	if err != nil {
 		return shim.Error(fmt.Sprintf("failed to check the merkle proof: %v", err))
 	}
-	merkleValue := new(common3.ToMerkleValue)
+	merkleValue := new(pcomm.ToMerkleValue)
 	if err := merkleValue.Deserialization(common.NewZeroCopySource(val)); err != nil {
 		return shim.Error(fmt.Sprintf("deserialize merkleValue error: %v", err))
 	}

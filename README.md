@@ -161,10 +161,10 @@ docker exec cliMagnetoCorp peer chaincode invoke -n ccm -c '{"Args":["getPolyCon
 
 ```
 docker exec cliMagnetoCorp peer chaincode install -n peth -v 0 -p github.com/polynetwork/fabric-contract/assets/cmd
-docker exec cliMagnetoCorp peer chaincode instantiate -n peth -v 0 -c '{"Args":["poly_eth", "pEth", "18", "1000000000000000000000000000", "peth", "true"]}' -C mychannel
+docker exec cliMagnetoCorp peer chaincode instantiate -n peth -v 0 -c '{"Args":["poly_eth", "pEth", "18", "1000000000000000000000000000", "true"]}' -C mychannel
 ```
 
-Init的参数从左到右为：token name、symbol、decimal、totalsupply、chaincodeName、isLockProxy；
+Init的参数从左到右为：token name、symbol、decimal、totalsupply、isLockProxy；
 
 isLockProxy设置为“true”则开启跨链功能，所有参数均为string；
 

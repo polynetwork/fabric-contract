@@ -24,11 +24,9 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/hyperledger/fabric/core/chaincode/shim"
 	pb "github.com/hyperledger/fabric/protos/peer"
+	"github.com/polynetwork/fabric-contract/lockproxy"
 	"github.com/polynetwork/fabric-contract/utils"
-	pcommon "github.com/polynetwork/poly/common"
-	"io"
 	"math/big"
-	"strconv"
 )
 
 const (
@@ -46,55 +44,12 @@ const (
 	EventApproval          = TokenId + "approve"
 	EventTransferOwnership = TokenId + "transferOwnerShip"
 
-	ProxyCCM           = "proxy_ccm"
-	ProxyBindKey       = "proxy-%d"
-	AssetBindKey       = "asset-%d"
-	LockProxyAddr      = "lockproxy_addr"
-	IsLockProxy        = "is_lp"
-	FromCCM            = "from_ccm"
+	IsCrossChainOn = "is_cc_on"
+	LockProxyAddr  = "lockproxy_addr"
+	LockProxyKey   = "lockproxy_%s"
 )
 
 var logger = shim.NewLogger("ERC20")
-
-type TxArgs struct {
-	ToAssetHash []byte
-	ToAddress   []byte
-	Amount      *big.Int
-}
-
-func (args *TxArgs) Serialization(sink *pcommon.ZeroCopySink) {
-	sink.WriteVarBytes(args.ToAssetHash)
-	sink.WriteVarBytes(args.ToAddress)
-	raw, _ := PadFixedBytes(args.Amount, 32)
-	sink.WriteBytes(raw)
-}
-
-func (args *TxArgs) Deserialization(source *pcommon.ZeroCopySource) error {
-	assetHash, eof := source.NextVarBytes()
-	if eof {
-		return fmt.Errorf("Args.Deserialization NextVarBytes AssetHash error:%s", io.ErrUnexpectedEOF)
-	}
-
-	toAddress, eof := source.NextVarBytes()
-	if eof {
-		return fmt.Errorf("Args.Deserialization NextVarBytes ToAddress error:%s", io.ErrUnexpectedEOF)
-	}
-
-	value, eof := source.NextBytes(32)
-	if eof {
-		return fmt.Errorf("Args.Deserialization NextBytes Value error:%s", io.ErrUnexpectedEOF)
-	}
-
-	amt, err := UnpadFixedBytes(value, 32)
-	if err != nil {
-		return fmt.Errorf("faield to get amount: %v", err)
-	}
-
-	args.ToAssetHash = assetHash
-	args.ToAddress = toAddress
-	args.Amount = amt
-	return nil
-}
 
 type ERC20 interface {
 	// return with the name in bytes
@@ -111,7 +66,7 @@ type ERC20 interface {
 
 type ERC20TokenImpl struct{}
 
-// args: name, symbol, decimal, totalsupply, isLockProxy
+// args: name, symbol, decimal, totalsupply, [CCMChainCodeName, [lockProxyAddr, LPchaincodeName]]
 func (token *ERC20TokenImpl) Init(stub shim.ChaincodeStubInterface) pb.Response {
 	rawName, _ := stub.GetState(TokenName)
 	if len(rawName) != 0 {
@@ -119,8 +74,8 @@ func (token *ERC20TokenImpl) Init(stub shim.ChaincodeStubInterface) pb.Response 
 	}
 
 	args := stub.GetStringArgs()
-	if len(args) != 4 && len(args) != 5 {
-		return shim.Error("wrong args number and should be four or five")
+	if 4 > len(args) || len(args) > 7 || len(args) == 6 {
+		return shim.Error("wrong args number and should be four, five or seven")
 	}
 	if args[0] == "" {
 		return shim.Error(fmt.Sprintf("token name can't be empty"))
@@ -165,19 +120,30 @@ func (token *ERC20TokenImpl) Init(stub shim.ChaincodeStubInterface) pb.Response 
 	if err = stub.PutState(TokenOwner, owner.Bytes()); err != nil {
 		return shim.Error(fmt.Sprintf("failed To put token owner: %v", err))
 	}
-	lpAddr := utils.GetAddrFromRaw(append([]byte(LockProxyAddr), owner.Bytes()...))
-	if err := stub.PutState(LockProxyAddr, lpAddr.Bytes()); err != nil {
-		return shim.Error(fmt.Sprintf("failed to put lockproxy addr: %v", err))
-	}
 
 	var holder []byte
-	// if we get six args and it's true, it means this ERC20 start with LockProxy func
-	if len(args) == 5 && args[4] == "true" {
-		if err := stub.PutState(IsLockProxy, []byte(args[4])); err != nil {
-			return shim.Error(fmt.Sprintf("failed to save is_lockproxy: %v", err))
+	// if we get lockproxy address as args[5]
+	if len(args) == 7 {
+		lpAddr, err := hex.DecodeString(args[5])
+		if err != nil || len(lpAddr) != 20 {
+			return shim.Error(fmt.Sprintf("wrong lockproxy address: %s", args[4]))
 		}
-		holder = lpAddr.Bytes()
+		if err := stub.PutState(LockProxyAddr, lpAddr); err != nil {
+			return shim.Error(fmt.Sprintf("failed to put lockproxy addr: %v", err))
+		}
+		if err := stub.PutState(lockproxyKey(args[6]), lpAddr); err != nil {
+			return shim.Error(fmt.Sprintf("failed to put lockproxy ccname and addr: %v", err))
+		}
+		if err := stub.PutState(IsCrossChainOn, []byte(args[4])); err != nil {
+			return shim.Error(fmt.Sprintf("failed to put true for crosschain: %v", err))
+		}
+		holder = lpAddr
 	} else {
+		if len(args) == 5 && args[4] != "" {
+			if err := stub.PutState(IsCrossChainOn, []byte(args[4])); err != nil {
+				return shim.Error(fmt.Sprintf("failed to put true for crosschain: %v", err))
+			}
+		}
 		holder = owner.Bytes()
 	}
 
@@ -232,20 +198,18 @@ func (token *ERC20TokenImpl) Invoke(stub shim.ChaincodeStubInterface) pb.Respons
 		return token.decreaseAllowance(stub, args)
 	case "burn":
 		return token.burn(stub, args)
-	case "setManager":
-		return token.setManager(stub, args)
-	case "bindProxyHash":
-		return token.bindProxyHash(stub, args)
-	case "getProxyHash":
-		return token.getProxyHash(stub, args)
-	case "bindAssetHash":
-		return token.bindAssetHash(stub, args)
-	case "getAssetHash":
-		return token.getAssetHash(stub, args)
-	case "lock":
-		return token.lock(stub, args)
-	case "unlock":
-		return token.unlock(stub, args)
+	case "proxyTransfer":
+		return token.proxyTransfer(stub, args)
+	case "setLockProxyChainCode":
+		return token.setLockProxyChainCode(stub, args)
+	case "getLockProxyChainCode":
+		return token.getLockProxyChainCode(stub, args)
+	case "getCCM":
+		return token.getCCM(stub)
+	case "changeCCM":
+		return token.changeCCM(stub, args)
+	case "delLockProxyChainCode":
+		return token.delLockProxyChainCode(stub, args)
 	}
 
 	return shim.Error(fmt.Sprintf("no function name %s found", fn))
@@ -307,7 +271,7 @@ func (token *ERC20TokenImpl) mint(stub shim.ChaincodeStubInterface, args [][]byt
 		return shim.Error("number of args should be 2")
 	}
 	if _, err := checkOwner(stub); err != nil {
-		return shim.Error(fmt.Sprintf("failed To check owner: %v", err))
+		return shim.Error(fmt.Sprintf("failed to check owner: %v", err))
 	}
 
 	amt, ok := big.NewInt(0).SetString(string(args[1]), 10)
@@ -415,6 +379,155 @@ func (token *ERC20TokenImpl) transferLogic(stub shim.ChaincodeStubInterface, fro
 	}
 
 	return shim.Success(nil)
+}
+
+func (token *ERC20TokenImpl) setLockProxyChainCode(stub shim.ChaincodeStubInterface, args [][]byte) pb.Response {
+	if !isCCOn(stub) {
+		return shim.Error("not cross chain asset")
+	}
+	if _, err := checkOwner(stub); err != nil {
+		return shim.Error(fmt.Sprintf("failed to check owner: %v", err))
+	}
+	raw, _ := stub.GetState(LockProxyAddr)
+	if len(raw) == 0 {
+		return token.addLockProxy(stub, args)
+	}
+	return token.addLockProxyForMappingAsset(stub, raw, args)
+}
+
+func (token *ERC20TokenImpl) delLockProxyChainCode(stub shim.ChaincodeStubInterface, args [][]byte) pb.Response {
+	if len(args) != 1 {
+		return shim.Error("wrong args length and expect 1")
+	}
+	if !isCCOn(stub) {
+		return shim.Error("not cross chain asset")
+	}
+	if _, err := checkOwner(stub); err != nil {
+		return shim.Error(fmt.Sprintf("failed to check owner: %v", err))
+	}
+	if err := stub.DelState(lockproxyKey(string(args[0]))); err != nil {
+		return shim.Error(fmt.Sprintf("failed to del state: %v", err))
+	}
+	return shim.Success(nil)
+}
+
+func (token *ERC20TokenImpl) getLockProxyChainCode(stub shim.ChaincodeStubInterface, args [][]byte) pb.Response {
+	if !isCCOn(stub) {
+		return shim.Error("not cross chain asset")
+	}
+
+	raw, _ := stub.GetState(LockProxyAddr)
+	if len(raw) != 0 {
+		return shim.Success(raw)
+	}
+
+	if len(args) != 1 {
+		return shim.Error("wrong args length and expect 1")
+	}
+	raw, err := stub.GetState(lockproxyKey(string(args[0])))
+	if err != nil {
+		return shim.Error(fmt.Sprintf("failed to get proxy address: %v", err))
+	}
+	return shim.Success(raw)
+}
+
+func (token *ERC20TokenImpl) addLockProxyForMappingAsset(stub shim.ChaincodeStubInterface, lpAddr []byte, args [][]byte) pb.Response {
+	if len(args) != 1 {
+		return shim.Error("wrong args length and expect 1")
+	}
+	if string(args[0]) == "" {
+		return shim.Error("chaincode name required")
+	}
+	if err := stub.PutState(lockproxyKey(string(args[0])), lpAddr); err != nil {
+		return shim.Error(fmt.Sprintf("failed to put proxy name: %v", err))
+	}
+	logger.Infof("set lockproxy %s with address %s for mapping asset", string(args[0]), hex.EncodeToString(lpAddr))
+	return shim.Success(nil)
+}
+
+func (token *ERC20TokenImpl) addLockProxy(stub shim.ChaincodeStubInterface, args [][]byte) pb.Response {
+	if !isCCOn(stub) {
+		return shim.Error("not cross chain asset")
+	}
+	if _, err := checkOwner(stub); err != nil {
+		return shim.Error(fmt.Sprintf("failed to check owner: %v", err))
+	}
+	raw, _ := stub.GetState(LockProxyAddr)
+	if len(raw) != 0 {
+		return shim.Error("This chaincode is for mapping asset and only one lockproxy can be set. Use setLockProxyChainCode please. ")
+	}
+
+	if len(args) != 2 {
+		return shim.Error("wrong args length and expect 2")
+	}
+	if string(args[0]) == "" {
+		return shim.Error("chaincode name required")
+	}
+	lpAddr, err := hex.DecodeString(string(args[1]))
+	if err != nil || len(lpAddr) != 20 {
+		return shim.Error(fmt.Sprintf("wrong lockproxy address: %s", args[1]))
+	}
+	if err := stub.PutState(lockproxyKey(string(args[0])), lpAddr); err != nil {
+		return shim.Error(fmt.Sprintf("failed to put proxy name: %v", err))
+	}
+	logger.Infof("set lockproxy %s with address %s", string(args[0]), string(args[1]))
+	return shim.Success(nil)
+}
+
+func (token *ERC20TokenImpl) proxyTransfer(stub shim.ChaincodeStubInterface, args [][]byte) pb.Response {
+	if !isCCOn(stub) {
+		return shim.Error("not cross chain asset")
+	}
+	if len(args) != 3 {
+		return shim.Error("length 3 of args expected")
+	}
+
+	ccname, err := utils.GetCallingChainCodeName(stub)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("failed to get calling chaincode: %v", err))
+	}
+	ccmRec, err := stub.GetState(IsCrossChainOn)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("failed to get ccm: %v", err))
+	}
+	if len(ccmRec) == 0 {
+		return shim.Error("no ccm set in this crosschain asset")
+	}
+
+	originalArgs, err := utils.GetOriginalInputArgs(stub)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("failed to get original args: %v", err))
+	}
+	var lpName string
+	if string(ccmRec) == ccname {
+		rawProof, err := hex.DecodeString(string(originalArgs[1]))
+		if err != nil {
+			return shim.Error(fmt.Sprintf("failed to decode proof to hex: %v", err))
+		}
+		lpName, err = GetWhatCCMCalling(rawProof)
+		if err != nil {
+			return shim.Error(fmt.Sprintf("failed to get chaincode name which ccm calling: %v", err))
+		}
+	} else {
+		lpName = ccname
+	}
+
+	lpAddr, err := stub.GetState(lockproxyKey(lpName))
+	if err != nil {
+		return shim.Error(fmt.Sprintf("failed to get proxy address for chaincode %s: %v", lpName, err))
+	}
+	if len(lpAddr) == 0 {
+		return shim.Error(fmt.Sprintf("no proxy address for chaincode %s", lpName))
+	}
+	amt := big.NewInt(0).SetBytes(args[2])
+	if !bytes.Equal(lpAddr, args[0]) && !bytes.Equal(lpAddr, args[1]) {
+		return shim.Error(fmt.Sprintf("lockProxy address %s for %s not equal any address from the request: (from: %s, to: %s)",
+			hex.EncodeToString(lpAddr), lpName, hex.EncodeToString(args[0]), hex.EncodeToString(args[1])))
+	}
+
+	logger.Infof("successful to call proxyTransfer for chaincode %s: (from: %x, to: %x, amount: %s)",
+		lpName, args[0], args[1], amt.String())
+	return token.transferLogic(stub, args[0], args[1], amt)
 }
 
 func (token *ERC20TokenImpl) transferOwnership(stub shim.ChaincodeStubInterface, args [][]byte) pb.Response {
@@ -639,239 +752,19 @@ func (token *ERC20TokenImpl) burn(stub shim.ChaincodeStubInterface, args [][]byt
 	return token.transferLogic(stub, from.Bytes(), common.Address{}.Bytes(), amt)
 }
 
-func (token *ERC20TokenImpl) setManager(stub shim.ChaincodeStubInterface, args [][]byte) pb.Response {
+func (token *ERC20TokenImpl) changeCCM(stub shim.ChaincodeStubInterface, args [][]byte) pb.Response {
 	if len(args) != 1 {
-		return shim.Error("args number should be 1")
-	}
-	if !isCCOn(stub) {
-		return shim.Error("it's not for crosschain")
+		return shim.Error("number of args should be 1")
 	}
 	if _, err := checkOwner(stub); err != nil {
 		return shim.Error(fmt.Sprintf("failed to check owner: %v", err))
 	}
-	if err := stub.PutState(ProxyCCM, args[0]); err != nil {
-		return shim.Error(fmt.Sprintf("failed to put cross chain manager name: %v", err))
+	if len(args[0]) == 0 {
+		return shim.Error("ccm can't be nil")
 	}
-	return shim.Success(nil)
-}
-
-func (token *ERC20TokenImpl) bindProxyHash(stub shim.ChaincodeStubInterface, args [][]byte) pb.Response {
-	if len(args) != 2 {
-		return shim.Error("args number should be 2")
+	if err := stub.PutState(lockproxy.ProxyCCM, args[0]); err != nil {
+		return shim.Error(fmt.Sprintf("failed to put state: %v", err))
 	}
-	if !isCCOn(stub) {
-		return shim.Error("it's not for crosschain")
-	}
-	if _, err := checkOwner(stub); err != nil {
-		return shim.Error(fmt.Sprintf("failed to check owner: %v", err))
-	}
-	chainId, err := strconv.ParseUint(string(args[0]), 10, 64)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("failed to parse chainId: %v", err))
-	}
-	target, err := hex.DecodeString(string(args[1]))
-	if err != nil {
-		return shim.Error(fmt.Sprintf("failed to decode hex target proxy: %v", err))
-	}
-	if err := stub.PutState(getProxyBindKey(chainId), target); err != nil {
-		return shim.Error(fmt.Sprintf("failed to put proxy: %v", err))
-	}
-	return shim.Success(nil)
-}
-
-func (token *ERC20TokenImpl) getProxyHash(stub shim.ChaincodeStubInterface, args [][]byte) pb.Response {
-	if len(args) != 1 {
-		return shim.Error("args number should be 1")
-	}
-	chainId, err := strconv.ParseUint(string(args[0]), 10, 64)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("failed to parse chainId: %v", err))
-	}
-	val, err := stub.GetState(getProxyBindKey(chainId))
-	if err != nil {
-		return shim.Error(fmt.Sprintf("failed to put proxy: %v", err))
-	}
-	return shim.Success(val)
-}
-
-func (token *ERC20TokenImpl) bindAssetHash(stub shim.ChaincodeStubInterface, args [][]byte) pb.Response {
-	if len(args) != 2 {
-		return shim.Error("args number should be 2")
-	}
-	if !isCCOn(stub) {
-		return shim.Error("it's not for crosschain")
-	}
-	if _, err := checkOwner(stub); err != nil {
-		return shim.Error(fmt.Sprintf("failed to check owner: %v", err))
-	}
-	chainId, err := strconv.ParseUint(string(args[0]), 10, 64)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("failed to parse chainId: %v", err))
-	}
-	target, err := hex.DecodeString(string(args[1]))
-	if err != nil {
-		return shim.Error(fmt.Sprintf("failed to decode hex target asset: %v", err))
-	}
-	if err := stub.PutState(getAssetBindKey(chainId), target); err != nil {
-		return shim.Error(fmt.Sprintf("failed to put asset: %v", err))
-	}
-
-	return shim.Success(nil)
-}
-
-func (token *ERC20TokenImpl) getAssetHash(stub shim.ChaincodeStubInterface, args [][]byte) pb.Response {
-	if len(args) != 1 {
-		return shim.Error("args number should be 1")
-	}
-	chainId, err := strconv.ParseUint(string(args[0]), 10, 64)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("failed to parse chainId: %v", err))
-	}
-	val, err := stub.GetState(getAssetBindKey(chainId))
-	if err != nil {
-		return shim.Error(fmt.Sprintf("failed to put asset: %v", err))
-	}
-
-	return shim.Success(val)
-}
-
-func (token *ERC20TokenImpl) lock(stub shim.ChaincodeStubInterface, args [][]byte) pb.Response {
-	if len(args) != 3 {
-		return shim.Error("args number should be 4")
-	}
-	if !isCCOn(stub) {
-		return shim.Error("it's not for crosschain")
-	}
-
-	lpAddr, err := stub.GetState(LockProxyAddr)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("failed to get LockProxyAddr: %v", err))
-	}
-
-	from, err := utils.GetMsgSenderAddress(stub)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("failed to get tx sender: %v", err))
-	}
-	amt, ok := big.NewInt(0).SetString(string(args[2]), 10)
-	if !ok {
-		return shim.Error(fmt.Sprintf("failed to decode amount: %s", args[2]))
-	}
-	if amt.Sign() != 1 {
-		return shim.Error(fmt.Sprintf("amount should be positive"))
-	}
-
-	resp := token.transferLogic(stub, from.Bytes(), lpAddr, amt)
-	if resp.Status != shim.OK {
-		return shim.Error(fmt.Sprintf("failed to lock asset: %s", resp.Message))
-	}
-
-	chainId, err := strconv.ParseUint(string(args[0]), 10, 64)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("failed to parse chainId: %v", err))
-	}
-	toAsset, err := stub.GetState(getAssetBindKey(chainId))
-	if err != nil {
-		return shim.Error(fmt.Sprintf("failed to get toAsset: %v", err))
-	}
-	if len(toAsset) == 0 {
-		return shim.Error("get no toAsset")
-	}
-	toProxy, err := stub.GetState(getProxyBindKey(chainId))
-	if err != nil {
-		return shim.Error(fmt.Sprintf("failed to get toProxy: %v", err))
-	}
-	if len(toProxy) == 0 {
-		return shim.Error("get no toProxy")
-	}
-
-	ccm, err := stub.GetState(ProxyCCM)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("failed to get ccm: %v", err))
-	}
-	if len(ccm) == 0 {
-		return shim.Error("get no ccm")
-	}
-
-	toAddr, err := hex.DecodeString(string(args[1]))
-	if err != nil {
-		return shim.Error(fmt.Sprintf("failed to decode hex toAddr: %v", err))
-	}
-	txArgs := &TxArgs{
-		ToAssetHash: toAsset,
-		ToAddress:   toAddr,
-		Amount:      amt,
-	}
-	sink := pcommon.NewZeroCopySink(nil)
-	txArgs.Serialization(sink)
-
-	ccname, err := GetCallingChainCodeName(stub)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("failed to get chaincode name: %v", err))
-	}
-
-	invokeArgs := make([][]byte, 6)
-	invokeArgs[0] = []byte("crossChain")
-	invokeArgs[1] = args[0]
-	invokeArgs[2] = []byte(hex.EncodeToString(toProxy))
-	invokeArgs[3] = []byte("unlock")
-	invokeArgs[4] = []byte(hex.EncodeToString(sink.Bytes()))
-	invokeArgs[5] = []byte(ccname)
-
-	resp = stub.InvokeChaincode(string(ccm), invokeArgs, "")
-	if resp.Status != shim.OK {
-		return shim.Error(fmt.Sprintf("failed to InvokeChaincode ccm %s: %s", string(ccm), resp.Message))
-	}
-	if err := stub.SetEvent(FromCCM, resp.Payload); err != nil {
-		return shim.Error(fmt.Sprintf("failed to set event: %v", err))
-	}
-
-	logger.Infof("successful to call ccm for cross-chain: (to_chainID: %d, to_contract: %x, to_asset: %x, to_addr: %x, amount: %s)",
-		chainId, toProxy, toAsset, toAddr, amt.String())
-
-	return shim.Success(nil)
-}
-
-func (token *ERC20TokenImpl) unlock(stub shim.ChaincodeStubInterface, args [][]byte) pb.Response {
-	if len(args) != 1 {
-		return shim.Error("args number should be 1")
-	}
-	if !isCCOn(stub) {
-		return shim.Error("it's not for crosschain")
-	}
-	ccname, err := GetCallingChainCodeName(stub)
-	if err != nil {
-		return shim.Error(err.Error())
-	}
-	ccmName, _ := stub.GetState(ProxyCCM)
-	if len(ccmName) == 0 {
-		return shim.Error("No cross chain manager set")
-	}
-	if ccname != string(ccmName) {
-		return shim.Error(fmt.Sprintf("wrong calling chaincode: (actual: %s, expected: %s)",
-			ccname, string(ccmName)))
-	}
-
-	raw, err := hex.DecodeString(string(args[0]))
-	if err != nil {
-		return shim.Error(fmt.Sprintf("failed to decode hex args: %v", err))
-	}
-	txArgs := &TxArgs{}
-	if err := txArgs.Deserialization(pcommon.NewZeroCopySource(raw)); err != nil {
-		return shim.Error(fmt.Sprintf("failed to deserialize tx args: %v", err))
-	}
-	lpAddr, err := stub.GetState(LockProxyAddr)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("failed to get LockProxyAddr: %v", err))
-	}
-
-	resp := token.transferLogic(stub, lpAddr, txArgs.ToAddress, txArgs.Amount)
-	if resp.Status != shim.OK {
-		return shim.Error(fmt.Sprintf("failed to transfer %s from DApp address %x to address %x: %s",
-			txArgs.Amount.String(), lpAddr, txArgs.ToAddress, resp.GetMessage()))
-	}
-
-	logger.Infof("unlock success: (to_addr: %x, amount: %s)", txArgs.ToAddress, txArgs.Amount.String())
-
 	return shim.Success(nil)
 }
 
@@ -900,16 +793,24 @@ func (token *ERC20TokenImpl) getLockProxyAddr(stub shim.ChaincodeStubInterface) 
 	return shim.Success(lpAddr)
 }
 
-func (token *ERC20TokenImpl) isCrossChainOn(stub shim.ChaincodeStubInterface) pb.Response {
-	val, _ := stub.GetState(IsLockProxy)
+func (token *ERC20TokenImpl) getCCM(stub shim.ChaincodeStubInterface) pb.Response {
+	val, _ := stub.GetState(IsCrossChainOn)
 	if len(val) == 0 {
-		return shim.Success([]byte("false"))
+		return shim.Error("no ccm found")
 	}
 	return shim.Success(val)
 }
 
+func (token *ERC20TokenImpl) isCrossChainOn(stub shim.ChaincodeStubInterface) pb.Response {
+	val, _ := stub.GetState(IsCrossChainOn)
+	if len(val) == 0 {
+		return shim.Success([]byte("false"))
+	}
+	return shim.Success([]byte("true"))
+}
+
 func isCCOn(stub shim.ChaincodeStubInterface) bool {
-	val, _ := stub.GetState(IsLockProxy)
+	val, _ := stub.GetState(IsCrossChainOn)
 	if len(val) == 0 {
 		return false
 	}
@@ -939,10 +840,6 @@ func approveKey(from, spender []byte) string {
 	return fmt.Sprintf(TokenApprove, hex.EncodeToString(from), hex.EncodeToString(spender))
 }
 
-func getProxyBindKey(chainId uint64) string {
-	return fmt.Sprintf(ProxyBindKey, chainId)
-}
-
-func getAssetBindKey(chainId uint64) string {
-	return fmt.Sprintf(AssetBindKey, chainId)
+func lockproxyKey(ccname string) string {
+	return fmt.Sprintf(LockProxyKey, ccname)
 }

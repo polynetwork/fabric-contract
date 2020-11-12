@@ -2,7 +2,17 @@
 
 # 1. 介绍
 
-这里介绍Poly跨链的Fabric链码，包含跨链核心协议实现和资产跨链应用。本代码仅适合Fabric1.4，其他版本未经测试。核心协议实现*CrossChainManager*在ccm目录，实现了同步Poly创世区块头、更新Poly验证人、验证并传递跨链消息等功能。资产跨链应用是Poly资产跨链DApp的一部分，是Fabric链的实现，在assets目录下，它实现了ERC20的所有功能，同时兼具跨链的功能，在实例化链码时可以选择是都启动跨链功能。
+这里介绍Poly跨链的Fabric链码，包含跨链核心协议实现和资产跨链应用。本代码仅适合Fabric1.4，其他版本未经测试。
+
+核心协议实现*CrossChainManager*在ccm目录，实现了同步Poly创世区块头、更新Poly验证人、验证并传递跨链消息等功能。
+
+LockProxy链码实现了资产的锁定与解锁功能，存储资产跨链的路由信息，是资产跨链DApp的一部分，代码在lockproxy目录下。
+
+资产链码时ERC20在Fabric链的实现，在assets目录下，它实现了ERC20的所有功能，同时为跨链专门预留了接口，在实例化链码时可以选择是都启动跨链功能。该链码可以部署为三种模式：Fabric原生资产、跨链的Fabric原生资产和跨链映射资产。
+
+- **Fabric原生资产**：使用ERC20链码在Fabric链上发行一个新的资产，该资产不参与跨链；
+- **跨链的Fabric原生资产**：使用ERC20链码在Fabric链上发行一个新的资产，该资产参与跨链；
+- **跨链映射资产**：跨链的资产需要在Fabric有一个接收资产，该链码部署后可用于接收跨链资产，比如接收ETH，这里称之为pETH。
 
 # 2. 接口
 
@@ -92,7 +102,7 @@ docker exec cliMagnetoCorp peer chaincode invoke -n ccm -c '{"Args":["changeBook
 函数crossChain负责处理Fabric跨链应用的消息，是消息离开Fabric的出口，所有的跨链应用都需要调用ccm的crossChain，来把要跨链的消息传播出去：
 
 ```
-docker exec cliMagnetoCorp peer chaincode invoke -n ccm -c '{"Args":["crossChain", "2", "D8aE73e06552E270340b63A8bcAbf9277a1aac99", "unlock", "cross_chain_msg_in_hex", "app_chaincode_name"]}' -C mychannel
+docker exec cliMagnetoCorp peer chaincode invoke -n ccm -c '{"Args":["crossChain", "2", "D8aE73e06552E270340b63A8bcAbf9277a1aac99", "unlock", "cross_chain_msg_in_hex"]}' -C mychannel
 ```
 
 参数包括：
@@ -107,7 +117,7 @@ docker exec cliMagnetoCorp peer chaincode invoke -n ccm -c '{"Args":["crossChain
 
 ”cross_chain_msg_in_hex“为应用链码要传递的跨链信息；
 
-”app_chaincode_name“是应用链码的名字；
+**实际上，crossChain仅能由应用链码调用，且应用链码的函数名不可为crossChain。**
 
 - **verifyHeaderAndExecuteTx**
 
@@ -151,98 +161,42 @@ docker exec cliMagnetoCorp peer chaincode invoke -n ccm -c '{"Args":["isAlreadyD
 docker exec cliMagnetoCorp peer chaincode invoke -n ccm -c '{"Args":["getPolyConsensusPeers"]}' -C mychannel
 ```
 
-## 2.2. 资产跨链应用
+## 2.2. 代理合约LockProxy
 
-这里的资产跨链将资产逻辑和代理逻辑结合到了一起，和以太坊的实现不同，每一个资产单独对应一个链码。
+LockProxy链码主要是两个接口：lock和unlock，用户调用lock锁定自己的资产到特定的地址，然后跨链流程会自动进行，而unlock只有跨链管理链码可以调用，用来为用户解锁资产。
 
 ### 2.2.1. 安装
 
-类似于ccm，安装peth，peth为ETH在当前channel的资产映射，实现了所有ERC20的功能：
+类似于ccm，安装lockproxy：
 
 ```
-docker exec cliMagnetoCorp peer chaincode install -n peth -v 0 -p github.com/polynetwork/fabric-contract/assets/cmd
-docker exec cliMagnetoCorp peer chaincode instantiate -n peth -v 0 -c '{"Args":["poly_eth", "pEth", "18", "1000000000000000000000000000", "true"]}' -C mychannel
+docker exec cliMagnetoCorp peer chaincode install -n lockproxy -v 0 -p github.com/polynetwork/fabric-contract/lockproxy/cmd
+docker exec cliMagnetoCorp peer chaincode instantiate -n lockproxy -v 0 -c '{"Args":[]}' -C mychannel
 ```
-
-Init的参数从左到右为：token name、symbol、decimal、totalsupply、isLockProxy；
-
-isLockProxy设置为“true”则开启跨链功能，所有参数均为string；
 
 ### 2.2.2. 初始化
 
 设置管理链码名字：
 
 ```
-docker exec cliMagnetoCorp peer chaincode invoke -n peth -c '{"Args":["setManager", "ccm"]}' -C mychannel
+docker exec cliMagnetoCorp peer chaincode invoke -n lockproxy -c '{"Args":["setManager", "ccm"]}' -C mychannel
 ```
 
 配置DApp，绑定目标链的合约hash，即LockProxy：
 
 ```
-docker exec cliMagnetoCorp peer chaincode invoke -n peth -c '{"Args":["bindProxyHash", "2", "2EEA349947f93c3B9b74FBcf141e102ADD510eCE"]}' -C mychannel
+docker exec cliMagnetoCorp peer chaincode invoke -n lockproxy -c '{"Args":["bindProxyHash", "2", "2EEA349947f93c3B9b74FBcf141e102ADD510eCE"]}' -C mychannel
 ```
 
 参数“2”为目标链chainID，“2EEA349947f93c3B9b74FBcf141e102ADD510eCE”为LockProxy合约hash。
 
-配置目标链资产hash，如下配置ETH：
+配置目标链资产hash，如下配置ETH，peth为ETH在当前channel的资产映射（链码名字），实现了所有ERC20的功能：
 
 ```
-docker exec cliMagnetoCorp peer chaincode invoke -n peth -c '{"Args":["bindAssetHash", "2", "0000000000000000000000000000000000000000"]}' -C mychannel
+docker exec cliMagnetoCorp peer chaincode invoke -n lockproxy -c '{"Args":["bindAssetHash", "peth", "2", "0000000000000000000000000000000000000000"]}' -C mychannel
 ```
 
 ### 2.2.3 调用函数
-
-关于账户地址我们使用了发送交易者的公钥信息，实现了一个地址逻辑：
-
-```go
-func GetMsgSenderAddress(stub shim.ChaincodeStubInterface) (common.Address, error) {
-	creatorByte, err := stub.GetCreator()
-	if err != nil {
-		return common.Address{}, err
-	}
-	certStart := bytes.Index(creatorByte, []byte("-----BEGIN"))
-	if certStart == -1 {
-		return common.Address{}, fmt.Errorf("no CA found")
-	}
-	certText := creatorByte[certStart:]
-	bl, _ := pem.Decode(certText)
-	if bl == nil {
-		return common.Address{}, fmt.Errorf("failed to decode pem")
-	}
-
-	cert, err := x509.ParseCertificate(bl.Bytes)
-	if err != nil {
-		return common.Address{}, fmt.Errorf("failed to parse CA: %v", err)
-	}
-	hash := sha256.New()
-	hash.Write(cert.RawSubjectPublicKeyInfo)
-	addr := common.BytesToAddress(hash.Sum(nil)[12:])
-	return addr, nil
-}
-```
-
-要获得自己的地址可以通过调用：
-
-```
-docker exec cliMagnetoCorp peer chaincode invoke -n peth -c '{"Args":["getMyAddr"]}' -C mychannel
-```
-
-结果为：
-
-```
-2020-10-29 09:04:05.923 UTC [chaincodeCmd] InitCmdFactory -> INFO 001 Retrieved channel (mychannel) orderer endpoint: orderer.example.com:7050
-2020-10-29 09:04:05.931 UTC [chaincodeCmd] chaincodeInvokeOrQuery -> INFO 002 Chaincode invoke successful. result: status:200 payload:"\233X&&<\036I\234\374L\022\333\216\351\212\301\367XA\027" 
-```
-
-可以转换为：
-
-```go
-fmt.Println(hex.EncodeToString([]byte("\233X&&<\036I\234\374L\022\333\216\351\212\301\367XA\027")))
-```
-
-可以得到地址`9b5826263c1e499cfc4c12db8ee98ac1f7584117`。
-
-跨链部分：
 
 - **unlock**
 
@@ -252,10 +206,10 @@ fmt.Println(hex.EncodeToString([]byte("\233X&&<\036I\234\374L\022\333\216\351\21
 
 - **lock**
 
-用户调用lock，锁定资产，即peth到链码地址。参数包括：目标链ID、目标链地址、金额。
+用户调用lock，锁定资产，即peth到链码地址。参数包括：资产链码名字、目标链ID、目标链地址、金额。
 
 ```
-docker exec cliMagnetoCorp peer chaincode invoke -n peth -c '{"Args":["lock", "2", "344cFc3B8635f72F14200aAf2168d9f75df86FD3", "1000"]}' -C mychannel
+docker exec cliMagnetoCorp peer chaincode invoke -n lockproxy -c '{"Args":["lock", "peth", "2", "344cFc3B8635f72F14200aAf2168d9f75df86FD3", "1000"]}' -C mychannel
 ```
 
 - **getProxyHash**
@@ -263,7 +217,7 @@ docker exec cliMagnetoCorp peer chaincode invoke -n peth -c '{"Args":["lock", "2
 获取某条链绑定的proxy：
 
 ```
-docker exec cliMagnetoCorp peer chaincode invoke -n peth -c '{"Args":["getProxyHash", "2"]}' -C mychannel
+docker exec cliMagnetoCorp peer chaincode invoke -n lockproxy -c '{"Args":["getProxyHash", "2"]}' -C mychannel
 ```
 
 - **getAssetHash**
@@ -271,7 +225,7 @@ docker exec cliMagnetoCorp peer chaincode invoke -n peth -c '{"Args":["getProxyH
 获取某条链对应的资产hash：
 
 ```
-docker exec cliMagnetoCorp peer chaincode invoke -n peth -c '{"Args":["getAssetHash", "2"]}' -C mychannel
+docker exec cliMagnetoCorp peer chaincode invoke -n lockproxy -c '{"Args":["getAssetHash", "2"]}' -C mychannel
 ```
 
 - **getLockProxyAddr**
@@ -279,16 +233,62 @@ docker exec cliMagnetoCorp peer chaincode invoke -n peth -c '{"Args":["getAssetH
 获得合约锁定资产的地址（如果开启跨链的话）：
 
 ```
-docker exec cliMagnetoCorp peer chaincode invoke -n peth -c '{"Args":["getLockProxyAddr"]}' -C mychannel
+docker exec cliMagnetoCorp peer chaincode invoke -n lockproxy -c '{"Args":["getLockProxyAddr"]}' -C mychannel
 ```
 
-- **isCrossChainOn**
+- **getOwner**
 
-是否开启跨链功能：
+获取token的管理员：
 
 ```
-docker exec cliMagnetoCorp peer chaincode invoke -n peth -c '{"Args":["isCrossChainOn"]}' -C mychannel
+docker exec cliMagnetoCorp peer chaincode invoke -n peth -c '{"Args":["getOwner"]}' -C mychannel
 ```
+
+- **transferOwnership**
+
+更换管理员，仅能由管理员调用：
+
+```
+docker exec cliMagnetoCorp peer chaincode invoke -n peth -c '{"Args":["transferOwnership", "9b5826263c1e499cfc4c12db8ee98ac1f7584117"]}' -C mychannel
+```
+
+## 2.3. 资产合约
+
+### 2.3.1. 安装
+
+安装代码：
+
+```
+docker exec cliMagnetoCorp peer chaincode install -n peth -v 0 -p github.com/polynetwork/fabric-contract/lockproxy/cmd
+```
+
+对于不同资产类型，有不同的参数：
+
+- **Fabric原生资产**：原生资产部署只需要指定ERC20的参数即可。
+
+```
+docker exec cliMagnetoCorp peer chaincode instantiate -n erc20 -v 0 -c '{"Args":["poly_eth", "pEth", "18", "1000000000000000000000000000"]}' -C mychannel
+```
+
+Init的参数从左到右为：token name、symbol、decimal、totalsupply，所有参数均为string；
+
+- **跨链的Fabric原生资产**：除ERC20的参数外，需要额外指定一个参数；
+
+```
+docker exec cliMagnetoCorp peer chaincode instantiate -n erc20withcc -v 0 -c '{"Args":["poly_eth", "pEth", "18", "1000000000000000000000000000", "ccm"]}' -C mychannel
+```
+
+Init的参数从左到右为：token name、symbol、decimal、totalsupply、ccmChainCodeName，ccmChainCodeName是跨链管理合约的链码名字，设置了则说明跨链功能开启，所有参数均为string；
+
+这种类型的资产要跨链需要部署后，需要调用**setLockProxyChainCode**方法来设置对应的LockProxy信息，参数为LockProxy链码名字和一个特定的资产地址LockProxyAddr，LockProxyAddr是由LockProxy生成的，可以通过**getLockProxyAddr**方法获得，LockProxyAddr用来锁定资产，一个资产可以设置多个LockProxy。
+
+- **跨链映射资产**：pEth就是这种类型，需要额外指定三个参数：
+
+```
+docker exec cliMagnetoCorp peer chaincode instantiate -n peth -v 0 -c '{"Args":["poly_eth", "pEth", "18", "1000000000000000000000000000", "ccm", "9f6b536ae9f1fa0d0563e4dbfaf8a8ecef1a3c17", "lockproxy"]}' -C mychannel
+```
+
+最后两个为LockProxyAddr和LockProxy的链码名字。初始化的时候，所有pETH都会锁到LockProxyAddr里，只有unlock的调用才可以释放这些资产。
 
 **ERC20部分：**
 
@@ -410,5 +410,115 @@ docker exec cliMagnetoCorp peer chaincode invoke -n peth -c '{"Args":["decreaseA
 
 ```
 docker exec cliMagnetoCorp peer chaincode invoke -n peth -c '{"Args":["burn", "10000"]}' -C mychannel
+```
+
+- **getMyAddr**
+
+关于账户地址我们使用了发送交易者的公钥信息，实现了一个地址逻辑：
+
+```go
+func GetMsgSenderAddress(stub shim.ChaincodeStubInterface) (common.Address, error) {
+	creatorByte, err := stub.GetCreator()
+	if err != nil {
+		return common.Address{}, err
+	}
+	certStart := bytes.Index(creatorByte, []byte("-----BEGIN"))
+	if certStart == -1 {
+		return common.Address{}, fmt.Errorf("no CA found")
+	}
+	certText := creatorByte[certStart:]
+	bl, _ := pem.Decode(certText)
+	if bl == nil {
+		return common.Address{}, fmt.Errorf("failed to decode pem")
+	}
+
+	cert, err := x509.ParseCertificate(bl.Bytes)
+	if err != nil {
+		return common.Address{}, fmt.Errorf("failed to parse CA: %v", err)
+	}
+	hash := sha256.New()
+	hash.Write(cert.RawSubjectPublicKeyInfo)
+	addr := common.BytesToAddress(hash.Sum(nil)[12:])
+	return addr, nil
+}
+```
+
+要获得自己的地址可以通过调用：
+
+```
+docker exec cliMagnetoCorp peer chaincode invoke -n peth -c '{"Args":["getMyAddr"]}' -C mychannel
+```
+
+结果为：
+
+```
+2020-10-29 09:04:05.923 UTC [chaincodeCmd] InitCmdFactory -> INFO 001 Retrieved channel (mychannel) orderer endpoint: orderer.example.com:7050
+2020-10-29 09:04:05.931 UTC [chaincodeCmd] chaincodeInvokeOrQuery -> INFO 002 Chaincode invoke successful. result: status:200 payload:"\233X&&<\036I\234\374L\022\333\216\351\212\301\367XA\027" 
+```
+
+可以转换为：
+
+```go
+fmt.Println(hex.EncodeToString([]byte("\233X&&<\036I\234\374L\022\333\216\351\212\301\367XA\027")))
+```
+
+可以得到地址`9b5826263c1e499cfc4c12db8ee98ac1f7584117`。
+
+- **proxyTransfer**
+
+该方法仅跨链资产可用，且仅支持注册的LockProxy跨链码调用，专门用于操作LockProxyAddr中的资产。
+
+该方法会检测请求发起的链码是否是跨链管理合约，如果是说明要解锁资产，从交易的提案信息中解析出调用的代理合约，从存储中取出对应的LockProxyAddr，把钱从LockProxyAddr释放给用户地址，如果不是管理合约，则说明是锁定资产，发起请求的链码应该是代理合约，找到对应的LockProxyAddr，把用户的钱转给LockProxyAddr。如果不为一个代理合约设置LockProxyAddr，那么该合约调用proxyTransfer就会失败。
+
+- **setLockProxyChainCode**
+
+在资产链码设置LockProxy的信息。
+
+如果是第二种资产，那么调用方式为：
+
+```
+docker exec cliMagnetoCorp peer chaincode invoke -n peth -c '{"Args":["setLockProxyChainCode", "lockproxy", "9f6b536ae9f1fa0d0563e4dbfaf8a8ecef1a3c17"]}' -C mychannel
+```
+
+设置LockProxy链码名字为*lockproxy*，LockProxyAddr为*9f6b536ae9f1fa0d0563e4dbfaf8a8ecef1a3c17*，这时候LockProxyAddr中没有锁定任何资产，因为这是Fabric原生资产，会全部初始化给Owner，即部署链码的人。而第三种资产在初始化的时候已经设置好了LockProxy信息。
+
+- **getLockProxyChainCode**
+
+指定链码名字，获取对应的LockProxyAddr。
+
+```
+docker exec cliMagnetoCorp peer chaincode invoke -n peth -c '{"Args":["getLockProxyChainCode", "lockproxy"]}' -C mychannel
+```
+
+- **isCrossChainOn**
+
+是否开启跨链功能：
+
+```
+docker exec cliMagnetoCorp peer chaincode invoke -n lockproxy -c '{"Args":["isCrossChainOn"]}' -C mychannel
+```
+
+- **getCCM**
+
+获取设置的管理合约
+
+```
+docker exec cliMagnetoCorp peer chaincode invoke -n lockproxy -c '{"Args":["getCCM"]}' -C mychannel
+```
+
+- **changeCCM**
+
+更换跨链管理合约
+
+```
+docker exec cliMagnetoCorp peer chaincode invoke -n lockproxy -c '{"Args":["changeCCM", "ccm1"]}' -C mychannel
+```
+
+- **delLockProxyChainCode**
+
+删除LockProxy链码名和LockProxyAddr的键值对。
+
+```
+docker exec cliMagnetoCorp peer chaincode invoke -n lockproxy -c '{"Args":["delLockProxyChainCode", "lockproxy"]}' -C mychannel
 ```
 

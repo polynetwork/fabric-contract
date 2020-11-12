@@ -291,8 +291,8 @@ func (manager *CrossChainManager) changeBookKeeper(stub shim.ChaincodeStubInterf
 }
 
 func (manager *CrossChainManager) crossChain(stub shim.ChaincodeStubInterface, args [][]byte) peer.Response {
-	if len(args) != 5 {
-		return shim.Error(fmt.Sprintf("wrong number of args: get %d but 5 expected", len(args)))
+	if len(args) != 4 {
+		return shim.Error(fmt.Sprintf("wrong number of args: get %d but 4 expected", len(args)))
 	}
 
 	rawCcid, err := stub.GetState(CrossChainId)
@@ -319,12 +319,24 @@ func (manager *CrossChainManager) crossChain(stub shim.ChaincodeStubInterface, a
 	if err != nil {
 		return shim.Error(fmt.Sprintf("failed to decode args: %v", err))
 	}
+	fromContract, err := utils.GetCallingChainCodeName(stub)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("failed to get from contract: %v", err))
+	}
+	fromArgs, err := utils.GetOriginalInputArgs(stub)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("failed to get original args: %v", err))
+	}
+	if string(fromArgs[0]) == "crossChain" {
+		return shim.Error("func crossChain is only called from another chaincode and the original " +
+			"calling function can's be named 'crossChain' too. ")
+	}
 
 	res := &pcomm.MakeTxParam{
 		TxHash:              rawTxid,
 		Method:              string(args[2]),
 		CrossChainID:        rawCcid,
-		FromContractAddress: args[4],
+		FromContractAddress: []byte(fromContract),
 		ToContractAddress:   toContract,
 		ToChainID:           toChainId,
 		Args:                rawArgs,
@@ -349,7 +361,7 @@ func (manager *CrossChainManager) crossChain(stub shim.ChaincodeStubInterface, a
 
 	logger.Infof("to_poly call success: "+
 		"(fabric_txhash: %s, ccid: %s, dapp_chain_code: %s, to_cahinID: %d, to_contract: %s, calling_method: %s, args: %s)",
-		stub.GetTxID(), hex.EncodeToString(rawCcid), string(args[4]), toChainId, string(args[1]), string(args[2]), string(args[3]))
+		stub.GetTxID(), hex.EncodeToString(rawCcid), fromContract, toChainId, string(args[1]), string(args[2]), string(args[3]))
 
 	return shim.Success(raw)
 }

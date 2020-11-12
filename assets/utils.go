@@ -17,11 +17,10 @@
 package assets
 
 import (
-	"encoding/hex"
+	"errors"
 	"fmt"
-	"github.com/hyperledger/fabric/core/chaincode/shim"
-	"github.com/hyperledger/fabric/protos/utils"
-	"math/big"
+	"github.com/polynetwork/poly/common"
+	pcom "github.com/polynetwork/poly/native/service/cross_chain_manager/common"
 )
 
 type TransferEvent struct {
@@ -41,61 +40,42 @@ type TransferOwnershipEvent struct {
 	NewOwner []byte `json:"new_owner"`
 }
 
-// coming from "github.com/ethereum/go-ethereum/common/math"
-func PadFixedBytes(bigint *big.Int, intBsLen int) ([]byte, error) {
-	ret := make([]byte, intBsLen)
-	if bigint.Cmp(big.NewInt(0)) < 0 {
-		return nil, fmt.Errorf("PadFixedBytes doesnot support negative big.Int, but got:%s", bigint.String())
+func GetWhatCCMCalling(rawProof []byte) (string, error) {
+	value, _, _, err := ParseAuditpath(rawProof)
+	if err != nil {
+		return "", err
 	}
-	bigBs := bigint.Bytes()
-	if len(bigBs) > intBsLen || (len(bigBs) == intBsLen && bigBs[0]>>7 == 1) {
-		return nil, fmt.Errorf("PadFixedBytes only support maximum 2**255-1 big.Int, but got:%s", bigint.String())
+	merkleValue := new(pcom.ToMerkleValue)
+	if err := merkleValue.Deserialization(common.NewZeroCopySource(value)); err != nil {
+		return "", fmt.Errorf("deserialize merkleValue error: %v", err)
 	}
-	copy(ret[:len(bigBs)], make([]byte, len(bigBs)))
-	copy(ret[intBsLen-len(bigBs):], bigBs)
-	return ToArrayReverse(ret), nil
+	return string(merkleValue.MakeTxParam.ToContractAddress), nil
 }
 
-func ToArrayReverse(arr []byte) []byte {
-	l := len(arr)
-	x := make([]byte, 0)
-	for i := l - 1; i >= 0; i-- {
-		x = append(x, arr[i])
+func ParseAuditpath(path []byte) ([]byte, []byte, [][32]byte, error) {
+	source := common.NewZeroCopySource(path)
+	value, eof := source.NextVarBytes()
+	if eof {
+		return nil, nil, nil, errors.New("NextVarBytes eof")
 	}
-	return x
-}
-
-func UnpadFixedBytes(paddedBs []byte, intBsLen int) (*big.Int, error) {
-	if len(paddedBs) != intBsLen {
-		return nil, fmt.Errorf("UnpadFixedBytes only support 32 bytes value, but got:%s", hex.EncodeToString(paddedBs))
-	}
-	nonZeroPos := intBsLen - 1
-	for i := nonZeroPos; i >= 0; i-- {
-		p := paddedBs[i]
-		if p != 0x0 {
-			nonZeroPos = i
-			break
+	size := int((source.Size() - source.Pos()) / common.UINT256_SIZE)
+	pos := make([]byte, 0)
+	hashs := make([][32]byte, 0)
+	for i := 0; i < size; i++ {
+		f, eof := source.NextByte()
+		if eof {
+			return nil, nil, nil, errors.New("NextByte eof")
 		}
-	}
-	if nonZeroPos == intBsLen-1 && paddedBs[intBsLen-1]>>7 == 1 {
-		return nil, fmt.Errorf("UnpadFixedBytes only support 32 bytes nonnegative value, but got:%s", hex.EncodeToString(paddedBs))
+		pos = append(pos, f)
+
+		v, eof := source.NextHash()
+		if eof {
+			return nil, nil, nil, errors.New("NextHash eof")
+		}
+		var onehash [32]byte
+		copy(onehash[:], (v.ToArray())[0:32])
+		hashs = append(hashs, onehash)
 	}
 
-	return big.NewInt(0).SetBytes(ToArrayReverse(paddedBs[:nonZeroPos+1])), nil
-}
-
-func GetCallingChainCodeName(stub shim.ChaincodeStubInterface) (string, error) {
-	sp, err := stub.GetSignedProposal()
-	if err != nil {
-		return "", fmt.Errorf("failed to get signed proposal: %v", err)
-	}
-	p, err := utils.GetProposal(sp.ProposalBytes)
-	if err != nil {
-		return "", fmt.Errorf("failed to decode proposal: %v", err)
-	}
-	spec, err := utils.GetChaincodeInvocationSpec(p)
-	if err != nil {
-		return "", fmt.Errorf("failed to get invocation spec: %v", err)
-	}
-	return spec.ChaincodeSpec.ChaincodeId.Name, nil
+	return value, pos, hashs, nil
 }

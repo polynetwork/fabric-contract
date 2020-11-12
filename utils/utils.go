@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/hyperledger/fabric/core/chaincode/shim"
+	"github.com/hyperledger/fabric/protos/utils"
 	"math/big"
 )
 
@@ -119,4 +120,36 @@ func bytesReverse(u []byte) []byte {
 		u[i], u[j] = u[j], u[i]
 	}
 	return u
+}
+
+func GetCallingChainCodeName(stub shim.ChaincodeStubInterface) (string, error) {
+	sp, err := stub.GetSignedProposal()
+	if err != nil {
+		return "", fmt.Errorf("failed to get signed proposal: %v", err)
+	}
+	p, err := utils.GetProposal(sp.ProposalBytes)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode proposal: %v", err)
+	}
+	spec, err := utils.GetChaincodeInvocationSpec(p)
+	if err != nil {
+		return "", fmt.Errorf("failed to get invocation spec: %v", err)
+	}
+	return spec.ChaincodeSpec.ChaincodeId.Name, nil
+}
+
+func GetOriginalInputArgs(stub shim.ChaincodeStubInterface) ([][]byte, error) {
+	sp, err := stub.GetSignedProposal()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get signed proposal: %v", err)
+	}
+	p, err := utils.GetProposal(sp.ProposalBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode proposal: %v", err)
+	}
+	spec, err := utils.GetChaincodeInvocationSpec(p)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get invocation spec: %v", err)
+	}
+	return spec.ChaincodeSpec.Input.Args, nil
 }

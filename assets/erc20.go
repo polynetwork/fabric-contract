@@ -24,7 +24,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/hyperledger/fabric/core/chaincode/shim"
 	pb "github.com/hyperledger/fabric/protos/peer"
-	"github.com/polynetwork/fabric-contract/lockproxy"
 	"github.com/polynetwork/fabric-contract/utils"
 	"math/big"
 )
@@ -342,7 +341,8 @@ func (token *ERC20TokenImpl) transferLogic(stub shim.ChaincodeStubInterface, fro
 	fromBal := big.NewInt(0).SetBytes(rawFromBal)
 	fromBal = fromBal.Sub(fromBal, amt)
 	if fromBal.Sign() == -1 {
-		return shim.Error(fmt.Sprintf("From balance %s is less than the amount %s", fromBal.String(), amt.String()))
+		sum := big.NewInt(0).Add(fromBal, amt)
+		return shim.Error(fmt.Sprintf("From balance %s is less than the amount %s", sum.String(), amt.String()))
 	}
 
 	toKey := balanceKey(to)
@@ -762,7 +762,7 @@ func (token *ERC20TokenImpl) changeCCM(stub shim.ChaincodeStubInterface, args []
 	if len(args[0]) == 0 {
 		return shim.Error("ccm can't be nil")
 	}
-	if err := stub.PutState(lockproxy.ProxyCCM, args[0]); err != nil {
+	if err := stub.PutState(IsCrossChainOn, args[0]); err != nil {
 		return shim.Error(fmt.Sprintf("failed to put state: %v", err))
 	}
 	return shim.Success(nil)

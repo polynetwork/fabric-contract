@@ -105,6 +105,7 @@ github.com/hyperledger/fabric/bccsp/pkcs11
 github.com/hyperledger/fabric/bccsp/signer
 github.com/hyperledger/fabric/bccsp/sw
 github.com/hyperledger/fabric/bccsp/utils
+github.com/hyperledger/fabric/common/attrmgr
 github.com/hyperledger/fabric/common/crypto
 github.com/hyperledger/fabric/common/flogging
 github.com/hyperledger/fabric/common/flogging/fabenc
@@ -113,6 +114,7 @@ github.com/hyperledger/fabric/common/metadata
 github.com/hyperledger/fabric/common/metrics
 github.com/hyperledger/fabric/common/semaphore
 github.com/hyperledger/fabric/common/util
+github.com/hyperledger/fabric/core/chaincode/lib/cid
 github.com/hyperledger/fabric/core/chaincode/platforms
 github.com/hyperledger/fabric/core/chaincode/platforms/ccmetadata
 github.com/hyperledger/fabric/core/chaincode/shim

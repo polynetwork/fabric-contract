@@ -22,7 +22,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	ethcomm "github.com/ethereum/go-ethereum/common"
+	"github.com/hyperledger/fabric/core/chaincode/lib/cid"
 	"github.com/hyperledger/fabric/core/chaincode/shim"
 	"github.com/hyperledger/fabric/protos/peer"
 	"github.com/polynetwork/fabric-contract/utils"
@@ -32,7 +32,6 @@ import (
 	"github.com/polynetwork/poly/merkle"
 	pcomm "github.com/polynetwork/poly/native/service/cross_chain_manager/common"
 	"github.com/polynetwork/poly/native/service/header_sync/ont"
-	"math/big"
 	"strconv"
 )
 
@@ -42,9 +41,9 @@ const (
 	PolyGenesisHeader         = "poly_genesis_header"
 	CrossChainManagerDeployer = "ccmdepolyer"
 	PolyEpochHeight           = "poly_epoch_height"
-	CrossChainId              = "poly_cross_chain_id"
 	ToPolyTx                  = "to_poly"
 	FromPolyTx                = "from_poly"
+	CallerLimitKey            = "ccm_caller_key"
 )
 
 var logger = shim.NewLogger("CrossChainManager")
@@ -57,10 +56,24 @@ func (manager *CrossChainManager) Init(stub shim.ChaincodeStubInterface) peer.Re
 		return shim.Success(nil)
 	}
 
+	var (
+		err     error
+	)
+
 	args := stub.GetArgs()
-	if len(args) != 1 {
+	switch len(args) {
+	case 1:
+	case 2:
+		if len(args[1]) == 0 {
+			return shim.Error("invalid limit key")
+		}
+		if err := stub.PutState(CallerLimitKey, args[1]); err != nil {
+			return shim.Error(fmt.Sprintf("failed to put ccm caller key: %v", err))
+		}
+	default:
 		return shim.Error("wrong length of args")
 	}
+
 	chainId, err := strconv.ParseUint(string(args[0]), 10, 64)
 	if err != nil {
 		return shim.Error(fmt.Sprintf("failed to parse chainId: %v", err))
@@ -78,14 +91,16 @@ func (manager *CrossChainManager) Init(stub shim.ChaincodeStubInterface) peer.Re
 	if err = stub.PutState(CrossChainManagerDeployer, op.Bytes()); err != nil {
 		return shim.Error(fmt.Sprintf("failed to put deployer: %v", err))
 	}
-	zero := big.NewInt(0)
-	if err = stub.PutState(CrossChainId, zero.Bytes()); err != nil {
-		return shim.Error(fmt.Sprintf("failed to put cross chain id zero: %v", err))
-	}
 	return shim.Success(nil)
 }
 
 func (manager *CrossChainManager) Invoke(stub shim.ChaincodeStubInterface) peer.Response {
+	rawKey, _ := stub.GetState(CallerLimitKey)
+	if len(rawKey) != 0 {
+		if err := cid.AssertAttributeValue(stub, string(rawKey), "true"); err != nil {
+			return shim.Error(fmt.Sprintf("only the caller with %s=true in CA can call this chaincode: %v", string(rawKey), err))
+		}
+	}
 	function, _ := stub.GetFunctionAndParameters()
 	args := stub.GetArgs()
 	if len(args) == 0 {
@@ -295,13 +310,6 @@ func (manager *CrossChainManager) crossChain(stub shim.ChaincodeStubInterface, a
 		return shim.Error(fmt.Sprintf("wrong number of args: get %d but 4 expected", len(args)))
 	}
 
-	rawCcid, err := stub.GetState(CrossChainId)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("failed to get raw cross chain id: %v", err))
-	}
-	ccid := big.NewInt(0).SetBytes(rawCcid)
-	rawCcid = ethcomm.BytesToHash(rawCcid).Bytes()
-
 	rawTxid, err := hex.DecodeString(stub.GetTxID())
 	if err != nil {
 		return shim.Error(fmt.Sprintf("failed to decode txid: %v", err))
@@ -335,7 +343,7 @@ func (manager *CrossChainManager) crossChain(stub shim.ChaincodeStubInterface, a
 	res := &pcomm.MakeTxParam{
 		TxHash:              rawTxid,
 		Method:              string(args[2]),
-		CrossChainID:        rawCcid,
+		CrossChainID:        rawTxid,
 		FromContractAddress: []byte(fromContract),
 		ToContractAddress:   toContract,
 		ToChainID:           toChainId,
@@ -345,23 +353,14 @@ func (manager *CrossChainManager) crossChain(stub shim.ChaincodeStubInterface, a
 	res.Serialization(sink)
 	raw := sink.Bytes()
 
-	key := fmt.Sprintf("%s-%s", ToPolyTx, hex.EncodeToString(rawCcid))
-	if err := stub.PutState(key, raw); err != nil {
-		return shim.Error(fmt.Sprintf("failed to save this cross chain info: %v", err))
-	}
-
-	ccid = ccid.Add(ccid, big.NewInt(1))
-	if err = stub.PutState(CrossChainId, ccid.Bytes()); err != nil {
-		return shim.Error(fmt.Sprintf("failed to put cross chain id: %v", err))
-	}
-
+	key := fmt.Sprintf("%s-%s", ToPolyTx, stub.GetTxID())
 	if err := stub.SetEvent(key, raw); err != nil {
 		return shim.Error(fmt.Sprintf("failed to set event: %v", err))
 	}
 
 	logger.Infof("to_poly call success: "+
 		"(fabric_txhash: %s, ccid: %s, dapp_chain_code: %s, to_cahinID: %d, to_contract: %s, calling_method: %s, args: %s)",
-		stub.GetTxID(), hex.EncodeToString(rawCcid), fromContract, toChainId, string(args[1]), string(args[2]), string(args[3]))
+		stub.GetTxID(), stub.GetTxID(), fromContract, toChainId, string(args[1]), string(args[2]), string(args[3]))
 
 	return shim.Success(raw)
 }
@@ -454,10 +453,10 @@ func (manager *CrossChainManager) verifyHeaderAndExecuteTx(stub shim.ChaincodeSt
 	if err != nil {
 		return shim.Error("failed to get chain id of this channel")
 	}
-	cid := binary.LittleEndian.Uint64(rawCid)
-	if cid != merkleValue.MakeTxParam.ToChainID {
+	chainId := binary.LittleEndian.Uint64(rawCid)
+	if chainId != merkleValue.MakeTxParam.ToChainID {
 		return shim.Error(fmt.Sprintf("target chain id is %d not %d of this channel",
-			merkleValue.MakeTxParam.ToChainID, cid))
+			merkleValue.MakeTxParam.ToChainID, chainId))
 	}
 
 	if err := stub.SetEvent(key, val); err != nil {

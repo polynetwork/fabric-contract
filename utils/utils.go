@@ -17,32 +17,17 @@
 package utils
 
 import (
-	"bytes"
 	"crypto/sha256"
-	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/hyperledger/fabric/core/chaincode/lib/cid"
 	"github.com/hyperledger/fabric/core/chaincode/shim"
 	"github.com/hyperledger/fabric/protos/utils"
 	"math/big"
 )
 
 func GetMsgSenderAddress(stub shim.ChaincodeStubInterface) (common.Address, error) {
-	creatorByte, err := stub.GetCreator()
-	if err != nil {
-		return common.Address{}, err
-	}
-	certStart := bytes.Index(creatorByte, []byte("-----BEGIN"))
-	if certStart == -1 {
-		return common.Address{}, fmt.Errorf("no CA found")
-	}
-	certText := creatorByte[certStart:]
-	bl, _ := pem.Decode(certText)
-	if bl == nil {
-		return common.Address{}, fmt.Errorf("failed to decode pem")
-	}
-	cert, err := x509.ParseCertificate(bl.Bytes)
+	cert, err := cid.GetX509Certificate(stub)
 	if err != nil {
 		return common.Address{}, fmt.Errorf("failed to parse CA: %v", err)
 	}

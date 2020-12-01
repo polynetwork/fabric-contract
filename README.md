@@ -37,21 +37,55 @@ cd polynetwork
 git clone https://github.com/polynetwork/fabric-contract.git
 ```
 
-下载后，安装链码到peer，正常返回200，然后实例化ccm：
+下载后，安装链码到peer，正常返回200：
 
 ```
 docker exec cliMagnetoCorp peer chaincode install -n ccm -v 0 -p github.com/polynetwork/fabric-contract/ccm/cmd
+```
+
+然后实例化ccm，在这里可以选择是否开启跨链属性检测，如果开启，将会要求调用ccm的CA具备属性`${CallerLimitKey}='true'`，如果不开启则没有调用限制。
+
+不开启如下：
+
+```
 docker exec cliMagnetoCorp peer chaincode instantiate -n ccm -v 0 -c '{"Args":["7"]}' -C mychannel
 ```
+
+开启如下，这里CallerLimitKey被设置为`ccm_caller`，即要求调用者CA包含属性`ccm_caller='true'`：
+
+```
+docker exec cliMagnetoCorp peer chaincode instantiate -n ccm -v 0 -c '{"Args":["7", "ccm_caller"]}' -C mychannel
+```
+
+参数中"7"是string类型，代表Fabric当前channel的跨链chainID，每个channel的跨链chainID不可相同，一条区块链对应一个ID。
 
 链码*CrossChainManager*的Init函数如下：
 
 ```go
 func (manager *CrossChainManager) Init(stub shim.ChaincodeStubInterface) peer.Response {
+	raw, _ := stub.GetState(CrossChainManagerDeployer)
+	if len(raw) != 0 {
+		return shim.Success(nil)
+	}
+
+	var (
+		err     error
+	)
+
 	args := stub.GetArgs()
-	if len(args) != 1 {
+	switch len(args) {
+	case 1:
+	case 2:
+		if len(args[1]) == 0 {
+			return shim.Error("invalid limit key")
+		}
+		if err := stub.PutState(CallerLimitKey, args[1]); err != nil {
+			return shim.Error(fmt.Sprintf("failed to put ccm caller key: %v", err))
+		}
+	default:
 		return shim.Error("wrong length of args")
 	}
+
 	chainId, err := strconv.ParseUint(string(args[0]), 10, 64)
 	if err != nil {
 		return shim.Error(fmt.Sprintf("failed to parse chainId: %v", err))
@@ -69,15 +103,11 @@ func (manager *CrossChainManager) Init(stub shim.ChaincodeStubInterface) peer.Re
 	if err = stub.PutState(CrossChainManagerDeployer, op.Bytes()); err != nil {
 		return shim.Error(fmt.Sprintf("failed to put deployer: %v", err))
 	}
-	zero := big.NewInt(0)
-	if err = stub.PutState(CrossChainId, zero.Bytes()); err != nil {
-		return shim.Error(fmt.Sprintf("failed to put cross chain id zero: %v", err))
-	}
 	return shim.Success(nil)
 }
 ```
 
-仅需要一个参数即可，"7"是string类型，代表Fabric当前channel的跨链chainID，每个channel的跨链chainID不可相同，一条区块链对应一个ID。
+
 
 ### 2.1.2. 初始化
 
